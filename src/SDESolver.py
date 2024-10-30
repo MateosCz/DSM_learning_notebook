@@ -99,13 +99,17 @@ class EulerMaruyama:
         def step(carry: Tuple[jnp.ndarray, jnp.ndarray], t: float) -> Tuple[Tuple[jnp.ndarray, jnp.ndarray], jnp.ndarray]:
             x, key = carry
             key, subkey = jrandom.split(key)
-            dW = jrandom.normal(subkey, (self.noise_size, self.dim)) * jnp.sqrt(self.dt)
+            subkey = jrandom.split(subkey, self.noise_size)
+            dW = jax.vmap(lambda key: jrandom.normal(key, (self.dim,)) * jnp.sqrt(self.dt), in_axes=(0))(subkey)
+            # dW = jax.vmap(lambda key: jrandom.multivariate_normal(key, jnp.zeros(self.dim), jnp.eye(self.dim) * self.dt), in_axes=(0))(subkey)
             drift = self.drift_fn(x, t)
             diffusion = self.diffusion_fn(x, t)
             x_next = x + drift * self.dt + jnp.einsum('ij,jk->ik', diffusion, dW)
             return (x_next, key), (x_next, diffusion)
-        times = jnp.linspace(0, self.total_time, self.num_steps + 1)
-        _, (trajectory, diffusion_history) = jax.lax.scan(step, (self.x0, self.rng_key), times[:-1])
+        times = jnp.linspace(0, self.total_time, self.num_steps)
+        print(times)
+        _, (trajectory, diffusion_history) = jax.lax.scan(step, (self.x0, self.rng_key), times)
+        # print(trajectory.shape)
         return jnp.concatenate([self.x0[None, ...], trajectory], axis=0), diffusion_history
 
     @staticmethod
