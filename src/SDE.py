@@ -32,10 +32,8 @@ class Brownian_Motion_SDE(SDE):
         return lambda x, t: jnp.eye(x.shape[0]) * self.sigma
     
     def Sigma(self):
-        return lambda x, t: jnp.linalg.matmul(self.diffusion_fn()(x, t), self.diffusion_fn()(x, t).T)
+        return lambda x, t: jnp.matmul(self.diffusion_fn()(x, t), self.diffusion_fn()(x, t).T)
     
-    def div_Sigma(self):
-        return lambda x, t: jnp.gradient(self.Sigma()(x, t), axis=1)
 
 
 class Kunita_Eulerian_SDE(SDE):
@@ -70,10 +68,8 @@ class Kunita_Eulerian_SDE(SDE):
         return Q_half
     
     def Sigma(self):
-        return lambda x, t: jnp.linalg.matmul(self.diffusion_fn()(x, t), self.diffusion_fn()(x, t).T)
+        return lambda x, t: jnp.matmul(self.diffusion_fn()(x, t), self.diffusion_fn()(x, t).T)
     
-    def div_Sigma(self):
-        return lambda x, t: jnp.gradient(self.Sigma()(x, t), axis=1)
 
 
     
@@ -92,67 +88,70 @@ class Ornstein_Uhlenbeck_SDE(SDE):
         return lambda x, t: self.sigma * jnp.eye(x.shape[0])
     
     def Sigma(self):
-        return lambda x, t: jnp.linalg.matmul(self.diffusion_fn()(x, t), self.diffusion_fn()(x, t).T)
+        return lambda x, t: jnp.matmul(self.diffusion_fn()(x, t), self.diffusion_fn()(x, t).T)
         
 
 
 class Kunita_Lagrange_SDE(SDE):
-    """ Eulerian SDE: dX(t) = Q^{1/2}(X(t)) dW(t),
-        see ``Stochastic flows and shape bridges, S. Sommer et al.'' for details.
-    """
-
-    def __init__(self,
-                 sigma: float = 1.0,
-                 kappa: float = 0.1):
+    def __init__(self, sigma: float = 1.0, kappa: float = 0.1):
         super().__init__()
         self.sigma = sigma
         self.kappa = kappa
-    
 
     def drift_fn(self):
-        # no drift term for this SDE
         return lambda x, t: jnp.zeros_like(x)
 
     def diffusion_fn(self):
-        """ Diffusion term of the Eulerian SDE defined by the Gaussian kernel k(x, y) = sigma * exp(-||x-y||^2 / kappa^2).
-            The covariance is computed between the landmarks.
-        """
         def Q_half(x, t):
-            # make sure the input is 2D and has 2 columns
-            assert x.ndim == 2 and x.shape[1] == 2, "Input x should have shape (n_pts, 2)"
-            n_pts = x.shape[0]
-            eps = 1e-4
-
+            # # Reshape x if it's 1D
+            # if x.ndim == 1:
+            #     x = x.reshape(-1, 2)
+            # # make sure the input has 2 columns
+            # assert x.shape[-1] == 2, "Input x should have shape (..., 2)"
+            
+            # n_pts = x.shape[0]
+            # eps = 1e-4
             kernel_fn = lambda x: self.sigma * jnp.exp(-jnp.sum(jnp.square(x), axis=-1) / self.kappa ** 2)
             dist = x[:, None, :] - x[None, :, :]
-            kernel = kernel_fn(dist) + eps * jnp.eye(n_pts)  # Regularization to avoid singularity
-            # reshape the kernel to the desired output shape
-            # Q_half = jnp.einsum("ij,kl->ijkl", kernel, jnp.eye(2))
+            # kernel = kernel_fn(dist) + eps * jnp.eye(x.shape[0])
+            kernel = kernel_fn(dist)
             return kernel
 
         return Q_half
     
     def Sigma(self):
-        return lambda x, t: jnp.linalg.matmul(self.diffusion_fn()(x, t), self.diffusion_fn()(x, t).T)
+        return lambda x, t: jnp.matmul(self.diffusion_fn()(x, t), self.diffusion_fn()(x, t).T)
     
-    def div_Sigma(self):
-        return lambda x, t: jnp.gradient(self.Sigma()(x, t), axis=1)
 '''
 Time reversed SDE, depend on the original SDE, induced by the doob's h transform and
 Kolmogorov's backward equation
 '''
 class Time_Reversed_SDE(SDE):
-    def __init__(self, original_sde: SDE, score_fn: Callable[[jnp.ndarray, float], jnp.ndarray], total_time: float):
+    def __init__(self, original_sde: SDE, score_fn: Callable[[jnp.ndarray, float], jnp.ndarray], total_time: float, dt: float):
         super().__init__()
         self.original_sde = original_sde
         self.score_fn = score_fn
         self.total_time = total_time
+        self.dt = dt
+        self.epsilon = 1e-5
+    def compute_div_sigma(self, x: jnp.ndarray, t: float) -> jnp.ndarray:
+        def div_sigma_single(x_i):
+            def sigma_comp(i):
+                sigma_i = lambda x: self.original_sde.diffusion_fn()(x, t)[i]
+                return jnp.trace(jax.jacfwd(sigma_i)(x_i))
+            return jax.vmap(sigma_comp)(jnp.arange(x_i.shape[0]))
+        
+        return jax.vmap(div_sigma_single)(x)
+
 
     def drift_fn(self):
-        return lambda x, t: -self.original_sde.drift_fn()(x, self.total_time - t) + self.original_sde.Sigma()(x, self.total_time - t) @ self.score_fn(x, self.total_time - t)
+        def drift_fn_impl(x,t, x0):
+            drift = -self.original_sde.drift_fn()(x, self.total_time - t) +\
+                jnp.matmul(self.original_sde.Sigma()(x, self.total_time - t), self.score_fn(x, self.total_time - t, x0))
+            return drift
+        return drift_fn_impl
     
     def diffusion_fn(self):
         return lambda x, t: self.original_sde.diffusion_fn()(x, self.total_time - t)
-    
     def Sigma(self):
         return lambda x, t: jnp.linalg.matmul(self.diffusion_fn()(x, t), self.diffusion_fn()(x, t).T)
