@@ -52,6 +52,7 @@ class DsmModel(nn.Module):
             x = jnp.concatenate([x, x0], axis=-1)
         x = nn.Dense(features=128)(x)
         x = nn.swish(x)
+        t= jnp.broadcast_to(jnp.expand_dims(t, axis=0), (x.shape[0], x.shape[-1]))
         x = jnp.concatenate([x, t], axis=-1)
         for hidden_dim in self.hidden_dims:
             x = nn.Dense(features=hidden_dim)(x)
