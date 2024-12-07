@@ -11,54 +11,86 @@ from src.SDESolver import SDESolver
 from typing import Optional
 import jax.random as jrandom
 from src.data.Data import DataGenerator
+from src.utils.KeyMonitor import KeyMonitor
+from tqdm import tqdm
+from functools import partial
 
 class Trainer(abc.ABC):
     model: nn.Module
     @abc.abstractmethod
-    def train_state_init(self, key: jnp.ndarray, lr: float = 1e-3, model_kwargs: dict = {}):
+    def train_state_init(self, model: nn.Module, lr: float = 1e-3, model_kwargs: dict = {}):
         pass
 
     @abc.abstractmethod
-    def train_epoch(self, train_state: train_state.TrainState, data_generator: DataGenerator, sde: SDE, solver: SDESolver, batch_size: int):
+    def train_epoch(self, train_state: train_state.TrainState, 
+                   data_generator: DataGenerator, sde: SDE, solver: SDESolver, batch_size: int):
         pass
 
     @abc.abstractmethod
-    def train(self, train_state: train_state.TrainState, model: nn.Module, model_inputs: dict, epochs: int):
+    def train(self, train_state: train_state.TrainState, sde: SDE, solver: SDESolver, 
+             data_generator: DataGenerator, epochs: int, batch_size: int):
         pass
 
 class SsmTrainer(Trainer):
-    def train_state_init(self, key: jnp.ndarray, model: nn.Module, lr: float = 1e-3, model_kwargs: dict = {}):
-        params =  model.init(key, model_kwargs['x'], model_kwargs['t'], model_kwargs['x0'])
+    def __init__(self, seed: int = 0):
+        self.key_monitor = KeyMonitor(seed)
+
+    def train_state_init(self, model: nn.Module, lr: float = 1e-3, model_kwargs: dict = {}):
+        init_key = self.key_monitor.next_key()
+        params = model.init(init_key, model_kwargs['x'], model_kwargs['t'], model_kwargs['x0'])
         tx = optax.adam(lr)
         return train_state.TrainState.create(apply_fn=model.apply, params=params, tx=tx)
 
-    def train_epoch(self, key: jnp.ndarray, train_state: train_state.TrainState, data_generator: DataGenerator, sde: SDE, solver: SDESolver, batch_size: int):
-        # sample x0 each time
-        key, subkey = jrandom.split(key)
-        x0 = data_generator.generate_data(subkey, batch_size)
-        key, subkey = jrandom.split(key)
-        solver = solver.from_sde(sde, solver.dt, solver.total_time, data_generator.landmark_num, 2,subkey)
-        key, subkey = jrandom.split(key)
-        training_data, diffusion_history = jax.vmap(solver.solve, in_axes=(0, None))(x0, subkey)
-        xs = training_data[:, 1:, :, :]
-        times = jnp.linspace(0, solver.total_time, solver.num_steps)
-        sigma_fn = sde.Sigma()
-        drift_fn = sde.drift_fn()
-        Sigmas = jax.vmap(sigma_fn, in_axes=(0, None))(xs, times)
-        drifts = jax.vmap(drift_fn, in_axes=(0, None))(xs, times)
+    def _generate_batch(self, data_generator: DataGenerator, batch_size: int):
+        key = self.key_monitor.next_key()
+        return data_generator.generate_data(key, batch_size)
+
+    @partial(jax.jit, static_argnums=(0, 3, 4))
+    def _train_step(self, train_state: train_state.TrainState, x0: jnp.ndarray, sde: SDE, solver: SDESolver, solver_key: jnp.ndarray, solve_keys: jnp.ndarray):
+        # Create new solver instance with provided key
+        solver = solver.from_sde(
+            sde=sde,
+            dt=solver.dt,
+            total_time=solver.total_time,
+            noise_size=x0.shape[1],
+            dim=x0.shape[2],
+            rng_key=solver_key
+        )
+        
+        # Solve SDE for each sample with provided keys
+        training_data, diffusion_history = jax.vmap(solver.solve)(x0, solve_keys)
+        
+        # Process data - make sure xs and times have matching dimensions
+        num_timesteps = training_data.shape[1]
+        times = jnp.linspace(0, solver.total_time, num_timesteps)
+        xs = training_data
+        
+        # Compute Sigmas and drifts for all timesteps
+        Sigmas = jax.vmap(jax.vmap(sde.Sigma, in_axes=(0, 0)), in_axes=(0, None))(xs, times)
+        drifts = jax.vmap(jax.vmap(sde.drift_fn, in_axes=(0, 0)), in_axes=(0, None))(xs, times)
+
         def loss_fn(params):
-            return jax.vmap(Losses.ssm_dsm_loss, in_axes=(None, None, 0, None, 0, 0, 0))(params, train_state, xs, times, x0, Sigmas, drifts)
+            loss = jax.vmap(Losses.ssm_dsm_loss, in_axes=(None, None, 0, None, 0, 0, 0))(
+                params, train_state, xs, times, x0, Sigmas, drifts
+            )
+            return jnp.mean(loss, axis=0)
 
         loss, grads = jax.value_and_grad(loss_fn)(train_state.params)
         train_state = train_state.apply_gradients(grads=grads)
         return train_state, loss
-    
-    
-    def train(self, train_state: train_state.TrainState, sde: SDE, solver: SDESolver, data_generator: DataGenerator, epochs: int, batch_size: int):
-        key = jrandom.PRNGKey(0)
+
+    def train_epoch(self, train_state: train_state.TrainState, 
+                   data_generator: DataGenerator, sde: SDE, solver: SDESolver, batch_size: int):
+        x0 = self._generate_batch(data_generator, batch_size)
+        solver_key = self.key_monitor.next_key()
+        solve_keys = self.key_monitor.split_keys(x0.shape[0])
+        return self._train_step(train_state, x0, sde, solver, solver_key, solve_keys)
+
+    def train(self, train_state: train_state.TrainState, sde: SDE, solver: SDESolver, 
+              data_generator: DataGenerator, epochs: int, batch_size: int):
         losses = jnp.zeros(epochs)
-        for i in range(epochs):
-            key, subkey = jrandom.split(key)
-            train_state, loss = self.train_epoch(subkey, train_state, data_generator, sde, solver, batch_size)
+        
+        for i in tqdm(range(epochs)):
+            train_state, loss = self.train_epoch(train_state, data_generator, sde, solver, batch_size)
             losses = losses.at[i].set(loss)
         return train_state, losses

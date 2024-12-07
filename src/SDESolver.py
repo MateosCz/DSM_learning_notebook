@@ -86,8 +86,8 @@ class SDESolver(ABC):
 
 class EulerMaruyama:
     def __init__(self, 
-                 drift_fn: Callable[..., jnp.ndarray],
-                 diffusion_fn: Callable[..., jnp.ndarray],
+                 drift_fn: Callable[[jnp.ndarray, float, Optional[jnp.ndarray]], jnp.ndarray],
+                 diffusion_fn: Callable[[jnp.ndarray, float], jnp.ndarray],
                  dt: float,
                  total_time: float,
                  noise_size: int,
@@ -110,8 +110,9 @@ class EulerMaruyama:
             x, key = carry
             key, subkey = jrandom.split(key)
             subkey = jrandom.split(subkey, self.noise_size) # noise size normally is same as the x0 resolution, but not necessarily
-            dW = jax.vmap(lambda key: jrandom.normal(key, (self.dim,)) * jnp.sqrt(self.dt), in_axes=(0))(subkey)
-            # dW = jax.vmap(lambda key: jrandom.multivariate_normal(key, jnp.zeros(self.dim), jnp.eye(self.dim) * self.dt), in_axes=(0))(subkey)
+            # dW = jax.vmap(lambda key: jrandom.normal(key, (self.dim,)) * jnp.sqrt(self.dt), in_axes=(0))(subkey)
+            dW = jax.vmap(lambda key: jrandom.multivariate_normal(key, jnp.zeros(self.dim), jnp.eye(self.dim) * self.dt), in_axes=(0))(subkey)
+        
             if self.condition_x is not None:
                 drift = self.drift_fn(x,t, self.condition_x)    
             else:
@@ -133,4 +134,4 @@ class EulerMaruyama:
 
     @staticmethod
     def from_sde(sde, dt: float, total_time: float, noise_size: int, dim: int, rng_key: jnp.ndarray, condition_x: Optional[jnp.ndarray] = None, debug_mode: bool = False) -> 'EulerMaruyama':
-        return EulerMaruyama(sde.drift_fn(), sde.diffusion_fn(), dt, total_time, noise_size, dim, rng_key, condition_x, debug_mode)
+        return EulerMaruyama(sde.drift_fn, sde.diffusion_fn, dt, total_time, noise_size, dim, rng_key, condition_x, debug_mode)

@@ -25,14 +25,14 @@ class Brownian_Motion_SDE(SDE):
         self.dim = dim
         self.sigma = sigma
 
-    def drift_fn(self):
-        return lambda x, t: jnp.zeros_like(x)
+    def drift_fn(self, x, t):
+        return jnp.zeros_like(x)
     
-    def diffusion_fn(self):
-        return lambda x, t: jnp.eye(x.shape[0]) * self.sigma
+    def diffusion_fn(self, x, t):
+        return jnp.eye(x.shape[0]) * self.sigma
     
-    def Sigma(self):
-        return lambda x, t: jnp.matmul(self.diffusion_fn()(x, t), self.diffusion_fn()(x, t).T)
+    def Sigma(self, x, t):
+        return jnp.matmul(self.diffusion_fn(x, t), self.diffusion_fn(x, t).T)
     
 
 
@@ -55,20 +55,20 @@ class Kunita_Eulerian_SDE(SDE):
         grid = grid.reshape(-1, 2)
         return grid
     
-    def drift_fn(self):
+    def drift_fn(self, x, t):
         drift= lambda x, t: 0
-        return drift
+        return drift(x, t)
 
-    def diffusion_fn(self):
+    def diffusion_fn(self, x, t):
         def Q_half(x, t):
             kernel_fn = lambda x, y: self.sigma * jnp.exp(-0.5 * jnp.linalg.norm(x - y, axis=-1) ** 2 / self.kappa ** 2)            
             Q_half = jax.vmap(jax.vmap(kernel_fn, in_axes=(0, None)), in_axes=(None, 0))(self.grid, x)
             # the integral(simulated) happens when we do the matrix multiplication in the sde solver, so here we just return the kernel matrix
             return Q_half 
-        return Q_half
+        return Q_half(x, t)
     
-    def Sigma(self):
-        return lambda x, t: jnp.matmul(self.diffusion_fn()(x, t), self.diffusion_fn()(x, t).T)
+    def Sigma(self, x, t):
+        return jnp.matmul(self.diffusion_fn(x, t), self.diffusion_fn(x, t).T)
     
 
 
@@ -80,15 +80,15 @@ class Ornstein_Uhlenbeck_SDE(SDE):
         self.sigma = sigma
         self.dim = mu.shape[0]
 
-    def drift_fn(self):
+    def drift_fn(self, x, t):
         drift = lambda x, t: self.theta * (self.mu - x)
-        return drift
+        return drift(x, t)
     
-    def diffusion_fn(self):
-        return lambda x, t: self.sigma * jnp.eye(x.shape[0])
+    def diffusion_fn(self, x, t):
+        return self.sigma * jnp.eye(x.shape[0])
     
-    def Sigma(self):
-        return lambda x, t: jnp.matmul(self.diffusion_fn()(x, t), self.diffusion_fn()(x, t).T)
+    def Sigma(self, x, t):
+        return jnp.matmul(self.diffusion_fn(x, t), self.diffusion_fn(x, t).T)
         
 
 
@@ -98,10 +98,10 @@ class Kunita_Lagrange_SDE(SDE):
         self.sigma = sigma
         self.kappa = kappa
 
-    def drift_fn(self):
-        return lambda x, t: jnp.zeros_like(x)
+    def drift_fn(self, x, t):
+        return jnp.zeros_like(x)    
 
-    def diffusion_fn(self):
+    def diffusion_fn(self, x, t):
         def Q_half(x, t):
             # # Reshape x if it's 1D
             # if x.ndim == 1:
@@ -117,10 +117,10 @@ class Kunita_Lagrange_SDE(SDE):
             kernel = kernel_fn(dist)
             return kernel
 
-        return Q_half
+        return Q_half(x, t)
     
-    def Sigma(self):
-        return lambda x, t: jnp.matmul(self.diffusion_fn()(x, t), self.diffusion_fn()(x, t).T)
+    def Sigma(self, x, t):
+        return jnp.matmul(self.diffusion_fn(x, t), self.diffusion_fn(x, t).T)
     
 '''
 Time reversed SDE, depend on the original SDE, induced by the doob's h transform and
@@ -144,14 +144,14 @@ class Time_Reversed_SDE(SDE):
         return jax.vmap(div_sigma_single)(x)
 
 
-    def drift_fn(self):
+    def drift_fn(self, x, t, x0):
         def drift_fn_impl(x,t, x0):
-            drift = -self.original_sde.drift_fn()(x, self.total_time - t) +\
-                jnp.matmul(self.original_sde.Sigma()(x, self.total_time - t), self.score_fn(x, self.total_time - t, x0))
+            drift = -self.original_sde.drift_fn(x, self.total_time - t) +\
+                jnp.matmul(self.original_sde.Sigma(x, self.total_time - t), self.score_fn(x, self.total_time - t, x0))
             return drift
-        return drift_fn_impl
+        return drift_fn_impl(x, t, x0)
     
-    def diffusion_fn(self):
-        return lambda x, t: self.original_sde.diffusion_fn()(x, self.total_time - t)
-    def Sigma(self):
-        return lambda x, t: jnp.linalg.matmul(self.diffusion_fn()(x, t), self.diffusion_fn()(x, t).T)
+    def diffusion_fn(self, x, t):
+        return self.original_sde.diffusion_fn(x, self.total_time - t)
+    def Sigma(self, x, t):
+        return jnp.matmul(self.diffusion_fn(x, t), self.diffusion_fn(x, t).T)
