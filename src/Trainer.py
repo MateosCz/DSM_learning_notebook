@@ -14,7 +14,7 @@ from src.data.Data import DataGenerator
 from src.utils.KeyMonitor import KeyMonitor
 from tqdm import tqdm
 from functools import partial
-
+from tqdm import trange
 class Trainer(abc.ABC):
     model: nn.Module
     @abc.abstractmethod
@@ -52,17 +52,18 @@ class SsmTrainer(Trainer):
             sde=sde,
             dt=solver.dt,
             total_time=solver.total_time,
-            noise_size=x0.shape[1],
             dim=x0.shape[2],
             rng_key=solver_key
         )
         
         # Solve SDE for each sample with provided keys
-        training_data, diffusion_history = jax.vmap(solver.solve)(x0, solve_keys)
+        training_data, diffusion_history = jax.vmap(solver.solve, in_axes=(0, 0))(x0, solve_keys)
+    
         
         # Process data - make sure xs and times have matching dimensions
         num_timesteps = training_data.shape[1]
         times = jnp.linspace(0, solver.total_time, num_timesteps)
+        print(times.shape)
         xs = training_data
         
         # Compute Sigmas and drifts for all timesteps
@@ -70,10 +71,8 @@ class SsmTrainer(Trainer):
         drifts = jax.vmap(jax.vmap(sde.drift_fn, in_axes=(0, 0)), in_axes=(0, None))(xs, times)
 
         def loss_fn(params):
-            loss = jax.vmap(Losses.ssm_dsm_loss, in_axes=(None, None, 0, None, 0, 0, 0))(
-                params, train_state, xs, times, x0, Sigmas, drifts
-            )
-            return jnp.mean(loss, axis=0)
+            loss = Losses.ssm_dsm_loss(params, train_state, xs, times, x0, Sigmas, drifts, object_fn='Heng')
+            return loss
 
         loss, grads = jax.value_and_grad(loss_fn)(train_state.params)
         train_state = train_state.apply_gradients(grads=grads)
@@ -89,8 +88,11 @@ class SsmTrainer(Trainer):
     def train(self, train_state: train_state.TrainState, sde: SDE, solver: SDESolver, 
               data_generator: DataGenerator, epochs: int, batch_size: int):
         losses = jnp.zeros(epochs)
-        
-        for i in tqdm(range(epochs)):
+        # print the loss in the tqdm progress bar
+        t = trange(epochs, desc="Bar desc")
+        for i in t:
             train_state, loss = self.train_epoch(train_state, data_generator, sde, solver, batch_size)
             losses = losses.at[i].set(loss)
+            t.set_description(f"Training loss: {loss}")
+            t.refresh()
         return train_state, losses

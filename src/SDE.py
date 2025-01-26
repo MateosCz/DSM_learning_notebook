@@ -21,10 +21,10 @@ class SDE(ABC):
         
 
 class Brownian_Motion_SDE(SDE):
-    def __init__(self, dim: int, sigma: DTypeLike):
+    def __init__(self, dim: int, sigma: DTypeLike, x0: jnp.ndarray):
         self.dim = dim
         self.sigma = sigma
-
+        self.noise_size = x0.shape[0]
     def drift_fn(self, x, t):
         return jnp.zeros_like(x)
     
@@ -37,12 +37,13 @@ class Brownian_Motion_SDE(SDE):
 
 
 class Kunita_Eulerian_SDE(SDE):
-    def __init__(self, sigma: DTypeLike, kappa: DTypeLike, grid_dim: int, grid_num: int, grid_range: Tuple[float, float] = (-0.5, 1.5)):
+    def __init__(self, sigma: DTypeLike, kappa: DTypeLike, grid_dim: int, grid_num: int, grid_range: Tuple[float, float], x0: jnp.ndarray):
         self.sigma = sigma
         self.kappa = kappa
         self.grid_dim = grid_dim
         self.grid_num = grid_num
         self.grid_range = grid_range
+        self.noise_size = grid_num ** 2
     @property
     def grid(self):
         '''
@@ -59,6 +60,7 @@ class Kunita_Eulerian_SDE(SDE):
         drift= lambda x, t: 0
         return drift(x, t)
 
+
     def diffusion_fn(self, x, t):
         def Q_half(x, t):
             kernel_fn = lambda x, y: self.sigma * jnp.exp(-0.5 * jnp.linalg.norm(x - y, axis=-1) ** 2 / self.kappa ** 2)            
@@ -66,11 +68,12 @@ class Kunita_Eulerian_SDE(SDE):
             # the integral(simulated) happens when we do the matrix multiplication in the sde solver, so here we just return the kernel matrix
             return Q_half 
         return Q_half(x, t)
+
+
     
     def Sigma(self, x, t):
         return jnp.matmul(self.diffusion_fn(x, t), self.diffusion_fn(x, t).T)
     
-
 
     
 class Ornstein_Uhlenbeck_SDE(SDE):
@@ -93,28 +96,35 @@ class Ornstein_Uhlenbeck_SDE(SDE):
 
 
 class Kunita_Lagrange_SDE(SDE):
-    def __init__(self, sigma: float = 1.0, kappa: float = 0.1):
+    def __init__(self, sigma: float, kappa: float, x0: jnp.ndarray):
         super().__init__()
         self.sigma = sigma
         self.kappa = kappa
-
+        self.noise_size = x0.shape[0]
     def drift_fn(self, x, t):
         return jnp.zeros_like(x)    
 
     def diffusion_fn(self, x, t):
         def Q_half(x, t):
-            # # Reshape x if it's 1D
-            # if x.ndim == 1:
-            #     x = x.reshape(-1, 2)
-            # # make sure the input has 2 columns
-            # assert x.shape[-1] == 2, "Input x should have shape (..., 2)"
+            # Ensure x is at least 2D
+            if x.ndim == 1:
+                x = x.reshape(1, -1)  # Add batch dimension if missing
+            elif x.ndim == 2:
+                pass
+            else:
+                raise ValueError(f"Input x should be 1D or 2D, got shape {x.shape}")
             
-            # n_pts = x.shape[0]
-            # eps = 1e-4
+            # Define kernel function
             kernel_fn = lambda x: self.sigma * jnp.exp(-jnp.sum(jnp.square(x), axis=-1) / self.kappa ** 2)
-            dist = x[:, None, :] - x[None, :, :]
-            # kernel = kernel_fn(dist) + eps * jnp.eye(x.shape[0])
+            
+            # Compute pairwise distances
+            x_expanded = x[:, None, :]  # Shape: (N, 1, D)
+            x_transposed = x[None, :, :]  # Shape: (1, N, D)
+            dist = x_expanded - x_transposed  # Shape: (N, N, D)
+            
+            # Compute kernel
             kernel = kernel_fn(dist)
+            
             return kernel
 
         return Q_half(x, t)
@@ -134,21 +144,27 @@ class Time_Reversed_SDE(SDE):
         self.total_time = total_time
         self.dt = dt
         self.epsilon = 1e-5
+        self.noise_size = original_sde.noise_size
     def compute_div_sigma(self, x: jnp.ndarray, t: float) -> jnp.ndarray:
         def div_sigma_single(x_i):
             def sigma_comp(i):
-                sigma_i = lambda x: self.original_sde.diffusion_fn()(x, t)[i]
+                sigma_i = lambda x: self.original_sde.diffusion_fn(x, t)[i]
                 return jnp.trace(jax.jacfwd(sigma_i)(x_i))
             return jax.vmap(sigma_comp)(jnp.arange(x_i.shape[0]))
         
         return jax.vmap(div_sigma_single)(x)
+    
+
 
 
     def drift_fn(self, x, t, x0):
         def drift_fn_impl(x,t, x0):
             drift = -self.original_sde.drift_fn(x, self.total_time - t) +\
-                jnp.matmul(self.original_sde.Sigma(x, self.total_time - t), self.score_fn(x, self.total_time - t, x0))
+                    jnp.matmul(self.original_sde.Sigma(x, self.total_time - t), self.score_fn(x, self.total_time - t, x0))
+            div_sigma = self.compute_div_sigma(x, self.total_time - t)
+            drift -= div_sigma
             return drift
+ 
         return drift_fn_impl(x, t, x0)
     
     def diffusion_fn(self, x, t):
