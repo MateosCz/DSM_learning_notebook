@@ -62,7 +62,7 @@ class EllipseDataGenerator(DataGenerator):
     def _generate_data_internal(self, keys: jnp.ndarray):
         return generate_ellipse_datas(keys, self.landmark_num, self.a, self.b, self.rotation_matrix, self.center)
 
-    def generate_data(self, key: jnp.ndarray, batch_size: int):
+    def generate_data(self, batch_size: int):
         keys = self.key_monitor.split_keys(batch_size)
         return self._generate_data_internal(keys)
 

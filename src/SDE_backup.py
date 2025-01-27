@@ -65,7 +65,6 @@ class Kunita_Eulerian_SDE(SDE):
         def Q_half(x, t):
             kernel_fn = lambda x, y: self.sigma * jnp.exp(-0.5 * jnp.linalg.norm(x - y, axis=-1) ** 2 / self.kappa ** 2)            
             Q_half = jax.vmap(jax.vmap(kernel_fn, in_axes=(0, None)), in_axes=(None, 0))(self.grid, x)
-            # should we times a dy here?(or / grid_num)
             # the integral(simulated) happens when we do the matrix multiplication in the sde solver, so here we just return the kernel matrix
             return Q_half 
         return Q_half(x, t)

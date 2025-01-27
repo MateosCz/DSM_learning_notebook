@@ -32,7 +32,7 @@ class SDESolver(ABC):
         pass
 
     @abstractmethod
-    def from_sde(self, sde: SDE, x0: jnp.ndarray, dt: float, total_time: float, batch_size: int, rng_key: jnp.ndarray, x0_list: Optional[jnp.ndarray] = None, debug_mode: bool = False) -> 'SDESolver':
+    def from_sde(self, sde: SDE, x0: jnp.ndarray, dt: float, total_time: float, batch_size: int, x0_list: Optional[jnp.ndarray] = None, debug_mode: bool = False) -> 'SDESolver':
         pass
 
 
@@ -92,7 +92,6 @@ class EulerMaruyama:
                  total_time: float,
                  noise_size: int,
                  dim: int,
-                 rng_key: jnp.ndarray,
                  condition_x: Optional[jnp.ndarray] = None,
                  debug_mode: bool = False):
         self.drift_fn = drift_fn
@@ -100,7 +99,6 @@ class EulerMaruyama:
         self.dt = dt
         self.total_time = total_time
         self.num_steps = int(total_time / dt)
-        self.rng_key = rng_key
         self.noise_size = noise_size
         self.condition_x = condition_x
         self.debug_mode = debug_mode
@@ -150,5 +148,5 @@ class EulerMaruyama:
 
 
     @staticmethod
-    def from_sde(sde, dt: float, total_time: float, dim: int, rng_key: jnp.ndarray, condition_x: Optional[jnp.ndarray] = None, debug_mode: bool = False) -> 'EulerMaruyama':
-        return EulerMaruyama(sde.drift_fn, sde.diffusion_fn, dt, total_time, sde.noise_size, dim, rng_key, condition_x, debug_mode)
+    def from_sde(sde, dt: float, total_time: float, dim: int, condition_x: Optional[jnp.ndarray] = None, debug_mode: bool = False) -> 'EulerMaruyama':
+        return EulerMaruyama(sde.drift_fn, sde.diffusion_fn, dt, total_time, sde.noise_size, dim,  condition_x, debug_mode)

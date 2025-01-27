@@ -36,33 +36,29 @@ def ssm_dsm_loss(params, state, xs, times, x0, Sigmas, drifts, object_fn='Heng')
                                                                object_fn)
     
     print(loss.shape)
-    if object_fn == 'Heng':
-        loss = jnp.mean(loss, axis=1)
-        loss = jnp.sum(loss) * dt/2
-    elif object_fn == 'Novel':
-        loss = jnp.sum(loss)/xs.shape[0]
-        loss = jnp.sum(loss)/2
-
+    loss = jnp.sum(loss, axis=1)
+    loss = jnp.sum(loss)/2
+    loss = loss/xs.shape[0]
     return loss
         
 def single_step_loss(params, state, x_prev, x, t, x0, Sigma, Sigma_prev, drift_prev, dt, object_fn='Heng'):
-    
+    pred_score = state.apply_fn(params, x, t, x0)
         
     if object_fn == 'Heng':
-        pred_score = state.apply_fn(params, x, t, x0)
         # Add regularization as in notebook
-        Sigma_prev = Sigma_prev + 5e-4 * jnp.eye(Sigma_prev.shape[0])
+        Sigma_prev = Sigma_prev + 1e-4 * jnp.eye(Sigma_prev.shape[0])
         Sigma_prev_inv = jnp.linalg.solve(Sigma_prev, jnp.eye(Sigma_prev.shape[0]))
         # Sigma_prev_inv = jnp.linalg.pinv(Sigma_prev)
         g_approx = -jnp.matmul(Sigma_prev_inv, (x - x_prev - dt * drift_prev))/dt
         diff = pred_score - g_approx
         loss = jnp.linalg.norm(jnp.matmul(diff.T, jnp.matmul(Sigma * dt, diff))) ** 2
-    elif object_fn == 'Novel':
+        loss = loss * dt
+    else:
         # Novel version from notebook
-        pred_score = state.apply_fn(params, x_prev, t-dt, x0)
         approx_stable = (x - x_prev - dt * drift_prev)
-        loss = pred_score.T @ (Sigma_prev * dt) @ pred_score + 2 * pred_score.T @ approx_stable
-        loss = loss * dt 
+        loss = pred_score.T @ (Sigma * dt) @ pred_score + 2 * pred_score.T @ approx_stable
+        loss = loss * dt
+        
     return loss
 # vmap over batch size, one batch's loss is mean at each timestep's loss
 def batched_single_step_loss(params, state, x_prev, x, t, x0, Sigma, Sigma_prev, drift_prev, dt, object_fn='Heng'):
