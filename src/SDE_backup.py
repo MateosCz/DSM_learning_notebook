@@ -44,7 +44,6 @@ class Kunita_Eulerian_SDE(SDE):
         self.grid_num = grid_num
         self.grid_range = grid_range
         self.noise_size = grid_num ** 2
-        self.d_grid = ((grid_range[1]-grid_range[0]) / grid_num) ** 2 # small square grid size
     @property
     def grid(self):
         '''
@@ -65,8 +64,7 @@ class Kunita_Eulerian_SDE(SDE):
     def diffusion_fn(self, x, t):
         def Q_half(x, t):
             kernel_fn = lambda x, y: self.sigma * jnp.exp(-0.5 * jnp.linalg.norm(x - y, axis=-1) ** 2 / self.kappa ** 2)            
-            Q_half = jax.vmap(jax.vmap(kernel_fn, in_axes=(0, None)), in_axes=(None, 0))(self.grid, x) * self.d_grid
-            # should we times a dy here?(or / grid_num)
+            Q_half = jax.vmap(jax.vmap(kernel_fn, in_axes=(0, None)), in_axes=(None, 0))(self.grid, x)
             # the integral(simulated) happens when we do the matrix multiplication in the sde solver, so here we just return the kernel matrix
             return Q_half 
         return Q_half(x, t)
@@ -125,7 +123,7 @@ class Kunita_Lagrange_SDE(SDE):
             dist = x_expanded - x_transposed  # Shape: (N, N, D)
             
             # Compute kernel
-            kernel = kernel_fn(dist)/self.noise_size
+            kernel = kernel_fn(dist)
             
             return kernel
 

@@ -5,7 +5,7 @@ from collections.abc import Callable
 from jaxtyping import Array, PyTree
 from abc import ABC, abstractmethod
 from typing import Tuple, Optional
-
+from src.SDE import SDE
 # class SDESolver(ABC):
 #     @abstractmethod
 #     def __call__(self):
@@ -26,6 +26,14 @@ from typing import Tuple, Optional
 #     @abstractmethod
 #     def sample_dW(self, key):
 #         pass
+class SDESolver(ABC):
+    @abstractmethod
+    def solve(self):
+        pass
+
+    @abstractmethod
+    def from_sde(self, sde: SDE, x0: jnp.ndarray, dt: float, total_time: float, batch_size: int, x0_list: Optional[jnp.ndarray] = None, debug_mode: bool = False) -> 'SDESolver':
+        pass
 
 
 
@@ -78,35 +86,37 @@ from typing import Tuple, Optional
 
 class EulerMaruyama:
     def __init__(self, 
-                 drift_fn: Callable[..., jnp.ndarray],
-                 diffusion_fn: Callable[..., jnp.ndarray],
-                 x0: jnp.ndarray,
+                 drift_fn: Callable[[jnp.ndarray, float, Optional[jnp.ndarray]], jnp.ndarray],
+                 diffusion_fn: Callable[[jnp.ndarray, float], jnp.ndarray],
                  dt: float,
                  total_time: float,
                  noise_size: int,
-                 rng_key: jnp.ndarray,
-                 x0_list: Optional[jnp.ndarray] = None,
+                 dim: int,
+                 condition_x: Optional[jnp.ndarray] = None,
                  debug_mode: bool = False):
         self.drift_fn = drift_fn
         self.diffusion_fn = diffusion_fn
-        self.x0 = x0
         self.dt = dt
         self.total_time = total_time
         self.num_steps = int(total_time / dt)
-        self.rng_key = rng_key
-        self.batch_size, self.dim = x0.shape
         self.noise_size = noise_size
-        self.x0_list = x0_list
+        self.condition_x = condition_x
         self.debug_mode = debug_mode
-    def solve(self) -> jnp.ndarray:
-        def step(carry: Tuple[jnp.ndarray, jnp.ndarray], t: float) -> Tuple[Tuple[jnp.ndarray, jnp.ndarray], jnp.ndarray]:
+        self.dim = dim
+    def solve(self, x0: jnp.ndarray, rng_key: jnp.ndarray) -> jnp.ndarray:
+        def step(carry: Tuple[jnp.ndarray, jnp.ndarray], t: float):
             x, key = carry
             key, subkey = jrandom.split(key)
-            subkey = jrandom.split(subkey, self.noise_size)
+            subkey = jrandom.split(subkey, self.noise_size) # noise size normally is same as the x0 resolution, but not necessarily
+            # print("subkey.shape: ", subkey.shape)
+            # dW = jax.vmap(lambda key: jrandom.normal(key, (self.dim,)) * jnp.sqrt(self.dt), in_axes=(0))(subkey)
             dW = jax.vmap(lambda key: jrandom.normal(key, (self.dim,)) * jnp.sqrt(self.dt), in_axes=(0))(subkey)
-            # dW = jax.vmap(lambda key: jrandom.multivariate_normal(key, jnp.zeros(self.dim), jnp.eye(self.dim) * self.dt), in_axes=(0))(subkey)
-            if self.x0_list is not None:
-                drift = self.drift_fn(x,t, self.x0_list)    
+            # dW = dW.reshape(self.noise_size, self.dim)
+            # dW = jrandom.multivariate_normal(subkey, jnp.zeros(self.dim), jnp.eye(self.dim)) * jnp.sqrt(self.dt)
+            # dW = jrandom.multivariate_normal(subkey[0], jnp.zeros(self.dim), jnp.eye(self.dim)) * jnp.sqrt(self.dt)
+        
+            if self.condition_x is not None:
+                drift = self.drift_fn(x,t, self.condition_x)    
             else:
                 drift = self.drift_fn(x, t)
             diffusion = self.diffusion_fn(x, t)
@@ -120,10 +130,23 @@ class EulerMaruyama:
                 jax.debug.print("dW: {dW}", dW=dW)
                 jax.debug.print("x_next: {x_next}", x_next=x_next)
             return (x_next, key), (x_next, diffusion)
+        # def step(self, x, t, key):
+ 
+        #     dt = self.dt
+        #     dW = jrandom.normal(key, shape=(self.grid_num ** 2,)) * jnp.sqrt(dt)
+
+        #     drift = self.drift_fn(x, t)
+        #     diffusion = self.diffusion_fn(x, t) 
+        #     x_next = x + drift * dt + jnp.einsum('ij,j->i', diffusion, dW) 
+        #     return x_next
+
+
         times = jnp.linspace(0, self.total_time, self.num_steps + 1)
-        _, (trajectory, diffusion_history) = jax.lax.scan(step, (self.x0, self.rng_key), times[:-1])
-        return jnp.concatenate([self.x0[None, ...], trajectory], axis=0), diffusion_history
+        _, (trajectory, diffusion_history) = jax.lax.scan(step, (x0, rng_key), times[:-1])
+        return jnp.concatenate([x0[None, ...], trajectory], axis=0), diffusion_history
+    
+
 
     @staticmethod
-    def from_sde(sde, x0: jnp.ndarray, dt: float, total_time: float, batch_size: int, rng_key: jnp.ndarray, x0_list: Optional[jnp.ndarray] = None, debug_mode: bool = False) -> 'EulerMaruyama':
-        return EulerMaruyama(sde.drift_fn(), sde.diffusion_fn(), x0, dt, total_time, batch_size, rng_key, x0_list, debug_mode)
+    def from_sde(sde, dt: float, total_time: float, dim: int, condition_x: Optional[jnp.ndarray] = None, debug_mode: bool = False) -> 'EulerMaruyama':
+        return EulerMaruyama(sde.drift_fn, sde.diffusion_fn, dt, total_time, sde.noise_size, dim,  condition_x, debug_mode)
