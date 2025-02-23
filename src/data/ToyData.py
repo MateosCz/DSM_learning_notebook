@@ -17,7 +17,7 @@ class CircleDataGenerator(DataGenerator):
     def _generate_data_internal(self, keys: jnp.ndarray):
         return generate_circle_datas(keys, self.landmark_num, self.radius, self.center)
 
-    def generate_data(self, key: jnp.ndarray, batch_size: int):
+    def generate_data(self, batch_size: int):
         """Generate batch of data
         Args:
             key: PRNGKey for random number generation
