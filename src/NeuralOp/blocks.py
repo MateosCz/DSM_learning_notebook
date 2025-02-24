@@ -34,11 +34,10 @@ class SpectralConv1D(nn.Module):
 
     @nn.compact
     def __call__(self, x: jnp.ndarray) -> jnp.ndarray:
-        """ x shape: (batch, in_grid_sz, in_co_dim) 
-
-            output shape: (batch, out_grid_sz, out_co_dim)
+        """ x shape: (in_grid_sz, in_co_dim) 
+            output shape: (out_grid_sz, out_co_dim)
         """
-        b, in_grid_sz, _ = x.shape
+        in_grid_sz = x.shape[0]
         out_grid_sz = in_grid_sz if self.out_grid_sz is None else self.out_grid_sz
         weights_shape = (self.n_modes//2+1, self.in_co_dim, self.out_co_dim)
         weights_real = self.param(
@@ -53,13 +52,13 @@ class SpectralConv1D(nn.Module):
         )
         weights = weights_real + 1j*weights_imag
 
-        x_ft = jnp.fft.rfft(x, axis=-2, norm=self.fft_norm)
+        x_ft = jnp.fft.rfft(x, axis=0, norm=self.fft_norm)
 
-        out_ft = jnp.zeros((b, in_grid_sz//2+1, self.out_co_dim), dtype=jnp.complex64)
-        x_ft = jnp.einsum("bij,ijk->bik", x_ft[:, :self.n_modes//2+1, :], weights)
-        out_ft = out_ft.at[..., :self.n_modes//2+1, :].set(x_ft)
+        out_ft = jnp.zeros((in_grid_sz//2+1, self.out_co_dim), dtype=jnp.complex64)
+        x_ft = jnp.einsum("ij,ijk->ik", x_ft[:self.n_modes//2+1, :], weights)
+        out_ft = out_ft.at[:self.n_modes//2+1, :].set(x_ft)
 
-        out = jnp.fft.irfft(out_ft, axis=-2, n=out_grid_sz, norm=self.fft_norm)
+        out = jnp.fft.irfft(out_ft, axis=0, n=out_grid_sz, norm=self.fft_norm)
         return out
 
 class SpectralConv2D(nn.Module):
@@ -72,11 +71,10 @@ class SpectralConv2D(nn.Module):
 
     @nn.compact
     def __call__(self, x: jnp.ndarray) -> jnp.ndarray:
-        """ x shape: (batch, in_grid_sz, in_grid_sz, in_co_dim) 
-        
-            output shape: (batch, out_grid_sz, out_grid_sz, out_co_dim)
+        """ x shape: (in_grid_sz, in_grid_sz, in_co_dim) 
+            output shape: (out_grid_sz, out_grid_sz, out_co_dim)
         """
-        b, in_grid_sz, _, _ = x.shape
+        in_grid_sz = x.shape[0]
         out_grid_sz = in_grid_sz if self.out_grid_sz is None else self.out_grid_sz
         weights_shape = (self.n_modes//2+1, self.n_modes//2+1, self.in_co_dim, self.out_co_dim)
         weights1_real = self.param(
@@ -102,20 +100,20 @@ class SpectralConv2D(nn.Module):
         )
         weights2 = weights2_real + 1j*weights2_imag
 
-        x_ft = jnp.fft.rfft2(x, axes=(1, 2), norm=self.fft_norm)    # (b, in_grid_sz, in_grid_sz//2+1, in_co_dim)
+        x_ft = jnp.fft.rfft2(x, axes=(0, 1), norm=self.fft_norm)
 
-        out_ft = jnp.zeros((b, in_grid_sz, in_grid_sz//2+1, self.out_co_dim), dtype=jnp.complex64)
-        x_ft1 = jnp.einsum("bijk,ijkl->bijl", x_ft[:, :self.n_modes//2+1, :self.n_modes//2+1, :], weights1)
-        x_ft2 = jnp.einsum("bijk,ijkl->bijl", x_ft[:, -(self.n_modes//2+1):, :self.n_modes//2+1, :], weights2)
-        out_ft = out_ft.at[:, :self.n_modes//2+1, :self.n_modes//2+1, :].set(x_ft1)
-        out_ft = out_ft.at[:, -(self.n_modes//2+1):, :self.n_modes//2+1, :].set(x_ft2)
+        out_ft = jnp.zeros((in_grid_sz, in_grid_sz//2+1, self.out_co_dim), dtype=jnp.complex64)
+        x_ft1 = jnp.einsum("ijk,ijkl->ijl", x_ft[:self.n_modes//2+1, :self.n_modes//2+1, :], weights1)
+        x_ft2 = jnp.einsum("ijk,ijkl->ijl", x_ft[-(self.n_modes//2+1):, :self.n_modes//2+1, :], weights2)
+        out_ft = out_ft.at[:self.n_modes//2+1, :self.n_modes//2+1, :].set(x_ft1)
+        out_ft = out_ft.at[-(self.n_modes//2+1):, :self.n_modes//2+1, :].set(x_ft2)
 
-        out = jnp.fft.irfft2(out_ft, s=(out_grid_sz, out_grid_sz), axes=(1, 2), norm=self.fft_norm)
+        out = jnp.fft.irfft2(out_ft, s=(out_grid_sz, out_grid_sz), axes=(0, 1), norm=self.fft_norm)
         return out
     
     
 class SpectralFreqTimeConv1D(nn.Module):
-    """ Time modulated integral kernel operator proposed by ``Learning PDE Solution Operator for Continuous Modelling of Time-Series`` """
+    """ Time modulated integral kernel operator """
     in_co_dim: int
     out_co_dim: int
     t_emb_dim: int
@@ -125,12 +123,12 @@ class SpectralFreqTimeConv1D(nn.Module):
 
     @nn.compact
     def __call__(self, x: jnp.ndarray, t_emb: jnp.ndarray) -> jnp.ndarray:
-        """ x shape: (batch, in_grid_sz, in_co_dim),
-            t_emb shape: (batch, t_emb_dim)
+        """ x shape: (in_grid_sz, in_co_dim),
+            t_emb shape: (t_emb_dim)
 
-            output shape: (batch, out_grid_sz, out_co_dim)
+            output shape: (out_grid_sz, out_co_dim)
         """
-        b, in_grid_sz, _ = x.shape
+        in_grid_sz = x.shape[0]
         out_grid_sz = in_grid_sz if self.out_grid_sz is None else self.out_grid_sz
         weights_shape = (self.n_modes//2+1, self.in_co_dim, self.out_co_dim)
         weights_real = self.param(
@@ -145,9 +143,9 @@ class SpectralFreqTimeConv1D(nn.Module):
         )
         weights = weights_real + 1j*weights_imag
 
-        x_ft = jnp.fft.rfft(x, axis=-2, norm=self.fft_norm)
+        x_ft = jnp.fft.rfft(x, axis=0, norm=self.fft_norm)
 
-        out_ft = jnp.zeros((b, in_grid_sz//2+1, self.out_co_dim), dtype=jnp.complex64)
+        out_ft = jnp.zeros((in_grid_sz//2+1, self.out_co_dim), dtype=jnp.complex64)
 
         t_emb_transf_real = nn.Dense(
             self.n_modes//2+1,
@@ -159,15 +157,15 @@ class SpectralFreqTimeConv1D(nn.Module):
         )(t_emb)
         t_emb_transf = t_emb_transf_real + 1j*t_emb_transf_imag
 
-        weights = jnp.einsum("bij,jkl->bikl", t_emb_transf[:, :, None]*jnp.eye(self.n_modes//2+1), weights)
-        x_ft = jnp.einsum("bij,bijk->bik", x_ft[:, :self.n_modes//2+1, :], weights)
-        out_ft = out_ft.at[..., :self.n_modes//2+1, :].set(x_ft)
+        weights = jnp.einsum("i,ijk->ijk", t_emb_transf[:self.n_modes//2+1], weights)
+        x_ft = jnp.einsum("ij,ijk->ik", x_ft[:self.n_modes//2+1, :], weights)
+        out_ft = out_ft.at[:self.n_modes//2+1, :].set(x_ft)
 
-        out = jnp.fft.irfft(out_ft, axis=-2, n=out_grid_sz, norm=self.fft_norm)
+        out = jnp.fft.irfft(out_ft, axis=0, n=out_grid_sz, norm=self.fft_norm)
         return out
 
 class SpectralFreqTimeConv2D(nn.Module):
-    """ Time modulated integral kernel operator proposed by ``Learning PDE Solution Operator for Continuous Modelling of Time-Series`` """
+    """ Time modulated integral kernel operator """
     in_co_dim: int
     out_co_dim: int
     t_emb_dim: int
@@ -177,12 +175,12 @@ class SpectralFreqTimeConv2D(nn.Module):
 
     @nn.compact
     def __call__(self, x: jnp.ndarray, t_emb: jnp.ndarray) -> jnp.ndarray:
-        """ x shape: (batch, in_grid_sz, in_grid_sz, in_co_dim),
-            t_emb shape: (batch, t_emb_dim)
+        """ x shape: (in_grid_sz, in_grid_sz, in_co_dim),
+            t_emb shape: (t_emb_dim)
 
-            output shape: (batch, out_grid_sz, out_grid_sz, out_co_dim)
+            output shape: (out_grid_sz, out_grid_sz, out_co_dim)
         """
-        b, in_grid_sz, _, _ = x.shape
+        in_grid_sz = x.shape[0]
         out_grid_sz = in_grid_sz if self.out_grid_sz is None else self.out_grid_sz
         weights_shape = (self.n_modes//2+1, self.n_modes//2+1, self.in_co_dim, self.out_co_dim)
         weights1_real = self.param(
@@ -208,8 +206,9 @@ class SpectralFreqTimeConv2D(nn.Module):
         )
         weights2 = weights2_real + 1j*weights2_imag
 
-        x_ft = jnp.fft.rfft2(x, axes=(1, 2), norm=self.fft_norm)    # (b, in_grid_sz, in_grid_sz//2+1, in_co_dim)
-        out_ft = jnp.zeros((b, in_grid_sz, in_grid_sz//2+1, self.out_co_dim), dtype=jnp.complex64)
+        x_ft = jnp.fft.rfft2(x, axes=(0, 1), norm=self.fft_norm)
+
+        out_ft = jnp.zeros((in_grid_sz, in_grid_sz//2+1, self.out_co_dim), dtype=jnp.complex64)
 
         t_emb_transf1_real = nn.Dense(
             self.n_modes//2+1,
@@ -219,7 +218,7 @@ class SpectralFreqTimeConv2D(nn.Module):
             self.n_modes//2+1,
             use_bias=False,
         )(t_emb)
-        t_emb_transf1 = t_emb_transf1_real + 1j*t_emb_transf1_imag  # (b, n_modes//2+1)
+        t_emb_transf1 = t_emb_transf1_real + 1j*t_emb_transf1_imag
         t_emb_transf2_real = nn.Dense(
             self.n_modes//2+1,
             use_bias=False,
@@ -230,16 +229,15 @@ class SpectralFreqTimeConv2D(nn.Module):
         )(t_emb)
         t_emb_transf2 = t_emb_transf2_real + 1j*t_emb_transf2_imag
 
-        weights1 = jnp.einsum("bij,jklm->biklm", t_emb_transf1[:, :, None]*jnp.eye(self.n_modes//2+1), weights1)
-        weights2 = jnp.einsum("bij,jklm->biklm", t_emb_transf2[:, :, None]*jnp.eye(self.n_modes//2+1), weights2)
+        weights1 = jnp.einsum("i,ijkl->ijkl", t_emb_transf1[:self.n_modes//2+1], weights1)
+        weights2 = jnp.einsum("i,ijkl->ijkl", t_emb_transf2[:self.n_modes//2+1], weights2)
 
-        out_ft = jnp.zeros((b, in_grid_sz, in_grid_sz//2+1, self.out_co_dim), dtype=jnp.complex64)
-        x_ft1 = jnp.einsum('bijk,bijkl->bijl', x_ft[:, :self.n_modes//2+1, :self.n_modes//2+1, :], weights1)
-        x_ft2 = jnp.einsum('bijk,bijkl->bijl', x_ft[:, -(self.n_modes//2+1):, :self.n_modes//2+1, :], weights2)
-        out_ft = out_ft.at[:, :self.n_modes//2+1, :self.n_modes//2+1, :].set(x_ft1)
-        out_ft = out_ft.at[:, -(self.n_modes//2+1):, :self.n_modes//2+1, :].set(x_ft2)
+        x_ft1 = jnp.einsum('ijk,ijkl->ijl', x_ft[:self.n_modes//2+1, :self.n_modes//2+1, :], weights1)
+        x_ft2 = jnp.einsum('ijk,ijkl->ijl', x_ft[-(self.n_modes//2+1):, :self.n_modes//2+1, :], weights2)
+        out_ft = out_ft.at[:self.n_modes//2+1, :self.n_modes//2+1, :].set(x_ft1)
+        out_ft = out_ft.at[-(self.n_modes//2+1):, :self.n_modes//2+1, :].set(x_ft2)
 
-        out = jnp.fft.irfft2(out_ft, s=(out_grid_sz, out_grid_sz), axes=(1, 2), norm=self.fft_norm)
+        out = jnp.fft.irfft2(out_ft, s=(out_grid_sz, out_grid_sz), axes=(0, 1), norm=self.fft_norm)
         return out
     
 class TimeConv1D(nn.Module):
@@ -248,10 +246,10 @@ class TimeConv1D(nn.Module):
     
     @nn.compact
     def __call__(self, x: jnp.ndarray, t_emb: jnp.ndarray) -> jnp.ndarray:
-        """ x shape: (batch, in_grid_sz, in_co_dim),
-            t_emb shape: (batch, t_emb_dim)
+        """ x shape: (in_grid_sz, in_co_dim),
+            t_emb shape: (t_emb_dim)
             
-            output shape: (batch, out_grid_sz, out_co_dim)
+            output shape: (out_grid_sz, out_co_dim)
         """
         x = nn.Conv(features=self.out_co_dim, kernel_size=(1,), padding="VALID")(x)
         weights = self.param(
@@ -263,19 +261,11 @@ class TimeConv1D(nn.Module):
             2 * self.out_co_dim,
             use_bias=False
         )(t_emb)
-        w_t, b_t = jnp.split(psi_t, 2, axis=-1) # (b, out_co_dim)
-        x = jnp.einsum("ij,bjk,blk->bli", weights, w_t[:, :, None]*jnp.eye(self.out_co_dim), x)
-        x = x + b_t[:, None, :]     # (b, in_grid_sz, out_co_dim)
+        w_t, b_t = jnp.split(psi_t, 2, axis=-1)
+        x = jnp.einsum("ij,j,lk->li", weights, w_t, x)
+        x = x + b_t
         if self.out_grid_sz is not None:
-            x = jax.vmap(
-                jax.vmap(
-                    partial(jax.image.resize, shape=(self.out_grid_sz, ), method="nearest"),
-                    in_axes=-1,
-                    out_axes=-1
-                ),
-                in_axes=0,
-                out_axes=0
-            )(x)        # (b, out_grid_sz, out_co_dim)
+            x = jax.image.resize(x, (self.out_grid_sz, self.out_co_dim), method="nearest")
         return x
     
 class TimeConv2D(nn.Module):
@@ -284,12 +274,12 @@ class TimeConv2D(nn.Module):
 
     @nn.compact
     def __call__(self, x: jnp.ndarray, t_emb: jnp.ndarray) -> jnp.ndarray:
-        """ x shape: (batch, in_grid_sz, in_grid_sz, in_co_dim),
-            t_emb shape: (batch, t_emb_dim)
+        """ x shape: (in_grid_sz, in_grid_sz, in_co_dim),
+            t_emb shape: (t_emb_dim)
             
-            output shape: (batch, out_grid_sz, out_grid_sz, out_co_dim)
+            output shape: (out_grid_sz, out_grid_sz, out_co_dim)
         """
-        x = nn.Conv(features=self.out_co_dim, kernel_size=(1, 1), padding="VALID")(x)   # (b, in_grid_sz, in_grid_sz, out_co_dim)
+        x = nn.Conv(features=self.out_co_dim, kernel_size=(1, 1), padding="VALID")(x)
         weights = self.param(
             'weights',
             nn.initializers.normal(),
@@ -300,18 +290,10 @@ class TimeConv2D(nn.Module):
             use_bias=False
         )(t_emb)
         w_t, b_t = jnp.split(psi_t, 2, axis=-1)
-        x = jnp.einsum("ij,bjk,blmk->blmi", weights, w_t[:, :, None]*jnp.eye(self.out_co_dim), x)
-        x = x + b_t[:, None, None, :]
+        x = jnp.einsum("ij,j,lmk->lmi", weights, w_t, x)
+        x = x + b_t[None, None, :]
         if self.out_grid_sz is not None:
-            x = jax.vmap(
-                jax.vmap(
-                    partial(jax.image.resize, shape=(self.out_grid_sz, self.out_grid_sz), method="nearest"),
-                    in_axes=-1,
-                    out_axes=-1
-                ),
-                in_axes=0,
-                out_axes=0
-            )(x)
+            x = jax.image.resize(x, (self.out_grid_sz, self.out_grid_sz, self.out_co_dim), method="nearest")
         return x
 
 ### FNO Blocks ###
@@ -322,15 +304,15 @@ class CTUNOBlock1D(nn.Module):
     n_modes: int
     out_grid_sz: int = None
     fft_norm: str = "forward"
-    norm: str = "batch"
+    norm: str = "instance"
     act: str = "relu"
     
     @nn.compact
-    def __call__(self, x: jnp.ndarray, t_emb: jnp.ndarray, train: bool = True) -> jnp.ndarray:
-        """ x shape: (batch, in_grid_sz, in_co_dim),
-            t_emb shape: (batch, t_emb_dim)
+    def __call__(self, x: jnp.ndarray, t_emb: jnp.ndarray) -> jnp.ndarray:
+        """ x shape: (in_grid_sz, in_co_dim),
+            t_emb shape: (t_emb_dim)
 
-            output shape: (batch, out_grid_sz, out_co_dim)
+            output shape: (out_grid_sz, out_co_dim)
         """
         x_spec_out = SpectralFreqTimeConv1D(
             self.in_co_dim,
@@ -345,10 +327,8 @@ class CTUNOBlock1D(nn.Module):
             self.out_grid_sz,
         )(x, t_emb)
         x_out = x_spec_out + x_res_out
-        if self.norm.lower() == "batch":
-            x_out = nn.BatchNorm(use_running_average=not train)(x_out)
-        elif self.norm.lower() == "instance":
-            x_out = nn.InstanceNorm()(x_out)
+        # if self.norm.lower() == "instance":
+        #     x_out = nn.InstanceNorm()(x_out)
 
         return get_activation_fn(self.act)(x_out)
     
@@ -359,15 +339,15 @@ class CTUNOBlock2D(nn.Module):
     n_modes: int
     out_grid_sz: int = None
     fft_norm: str = "forward"
-    norm: str = "batch"
+    norm: str = "instance"
     act: str = "relu"
     
     @nn.compact
-    def __call__(self, x: jnp.ndarray, t_emb: jnp.ndarray, train: bool = True) -> jnp.ndarray:
-        """ x shape: (batch, in_grid_sz, in_grid_sz, in_co_dim),
-            t_emb shape: (batch, t_emb_dim)
+    def __call__(self, x: jnp.ndarray, t_emb: jnp.ndarray) -> jnp.ndarray:
+        """ x shape: (in_grid_sz, in_grid_sz, in_co_dim),
+            t_emb shape: (t_emb_dim)
 
-            output shape: (batch, out_grid_sz, out_grid_sz, out_co_dim)
+            output shape: (out_grid_sz, out_grid_sz, out_co_dim)
         """
         x_spec_out = SpectralFreqTimeConv2D(
             self.in_co_dim,
@@ -382,10 +362,8 @@ class CTUNOBlock2D(nn.Module):
             self.out_grid_sz,
         )(x, t_emb)
         x_out = x_spec_out + x_res_out
-        if self.norm.lower() == "batch":
-            x_out = nn.BatchNorm(use_running_average=not train)(x_out)
-        elif self.norm.lower() == "instance":
-            x_out = nn.InstanceNorm()(x_out)
+        # if self.norm.lower() == "instance":
+        #     x_out = nn.InstanceNorm()(x_out)
 
         return get_activation_fn(self.act)(x_out)
     
@@ -398,12 +376,9 @@ class TimeEmbedding(nn.Module):
 
     @nn.compact
     def __call__(self, t):
-        """ t shape: (batch,) """
-        pe = jnp.empty((len(t), self.t_emb_dim))
-        factor = self.scaling * jnp.einsum('i,j->ij', 
-                                           t, 
-                                           jnp.exp(jnp.arange(0, self.t_emb_dim, 2) 
-                                                   * -(jnp.log(self.max_period) / self.t_emb_dim)))
-        pe = pe.at[:, 0::2].set(jnp.sin(factor))
-        pe = pe.at[:, 1::2].set(jnp.cos(factor))
+        """ t shape: (,) """
+        pe = jnp.empty((self.t_emb_dim,))
+        factor = self.scaling * t * jnp.exp(jnp.arange(0, self.t_emb_dim, 2) * -(jnp.log(self.max_period) / self.t_emb_dim))
+        pe = pe.at[0::2].set(jnp.sin(factor))
+        pe = pe.at[1::2].set(jnp.cos(factor))
         return pe

@@ -13,9 +13,13 @@ class CTUNO1D(nn.Module):
     act: str  = "relu"
 
     @nn.compact
-    def __call__(self, x: jnp.ndarray, t: jnp.ndarray, train: bool = False) -> jnp.ndarray:
+    def __call__(self, x: jnp.ndarray, t: jnp.ndarray) -> jnp.ndarray:
+        """ x shape: (in_grid_sz, in_co_dim)
+            t shape: (,)
+            output shape: (out_grid_sz, out_co_dim)
+        """
         t_emb_dim = 4 * self.lifting_dim
-        _, in_grid_sz, _ = x.shape
+        in_grid_sz = x.shape[0]
         co_dims_fmults = (1,) + self.co_dims_fmults
 
         t_emb = TimeEmbedding(
@@ -42,7 +46,7 @@ class CTUNO1D(nn.Module):
                 out_grid_sz=out_grid_sz,
                 norm=self.norm,
                 act=self.act
-            )(x, t_emb, train)
+            )(x, t_emb)
             downs.append(x)
 
         x = CTUNOBlock1D(
@@ -53,7 +57,7 @@ class CTUNO1D(nn.Module):
             out_grid_sz=int(out_grid_sz_fmults[-1] * in_grid_sz),
             norm=self.norm,
             act=self.act
-        )(x, t_emb, train)
+        )(x, t_emb)
 
         for idx_layer in range(1, len(self.co_dims_fmults)+1):
             in_co_dim_fmult = co_dims_fmults[-idx_layer]
@@ -70,7 +74,7 @@ class CTUNO1D(nn.Module):
                 out_grid_sz=out_grid_sz,
                 norm=self.norm,
                 act=self.act
-            )(x, t_emb, train)
+            )(x, t_emb)
         
         x = nn.Dense(
             self.out_co_dim,
@@ -89,9 +93,13 @@ class CTUNO2D(nn.Module):
     act: str  = "relu"
 
     @nn.compact
-    def __call__(self, x: jnp.ndarray, t: jnp.ndarray, train: bool = False) -> jnp.ndarray:
+    def __call__(self, x: jnp.ndarray, t: jnp.ndarray) -> jnp.ndarray:
+        """ x shape: (in_grid_sz, in_grid_sz, in_co_dim)
+            t shape: (,)
+            output shape: (out_grid_sz, out_grid_sz, out_co_dim)
+        """
         t_emb_dim = 4 * self.lifting_dim
-        _, in_grid_sz, _, _ = x.shape
+        in_grid_sz = x.shape[0]
         co_dims_fmults = (1,) + self.co_dims_fmults
 
         t_emb = TimeEmbedding(
@@ -120,7 +128,7 @@ class CTUNO2D(nn.Module):
                 out_grid_sz=out_grid_sz,
                 norm=self.norm,
                 act=self.act
-            )(x, t_emb, train)
+            )(x, t_emb)
             downs.append(x)
 
         x = CTUNOBlock2D(
@@ -131,7 +139,7 @@ class CTUNO2D(nn.Module):
             out_grid_sz=int(out_grid_sz_fmults[-1] * in_grid_sz),
             norm=self.norm,
             act=self.act
-        )(x, t_emb, train)
+        )(x, t_emb)
 
         for idx_layer in range(1, len(self.co_dims_fmults)+1):
             in_co_dim_fmult = co_dims_fmults[-idx_layer]
@@ -148,7 +156,7 @@ class CTUNO2D(nn.Module):
                 out_grid_sz=out_grid_sz,
                 norm=self.norm,
                 act=self.act
-            )(x, t_emb, train)
+            )(x, t_emb)
         
         x = nn.Conv(
             features=self.out_co_dim,

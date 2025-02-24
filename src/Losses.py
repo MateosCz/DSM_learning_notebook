@@ -2,7 +2,7 @@ import jax
 import jax.numpy as jnp
 from src.math.linalg import mat_weighted_norm
 
-def ssm_dsm_loss(params, state, xs, times, x0, Sigmas, drifts, object_fn='Heng'):
+def ssm_dsm_loss(params, state, xs, times, x0, Sigmas, drifts, object_fn='Heng', with_x0=True):
     dt = times[1] - times[0]
     # dimensions:
     # Sigmas: (batch_size, num_timesteps, num_landmarks, dim)
@@ -23,6 +23,7 @@ def ssm_dsm_loss(params, state, xs, times, x0, Sigmas, drifts, object_fn='Heng')
                                                         1, #Sigma_prev
                                                         1, #drift_prev
                                                         None, #dt
+                                                        None, #object_fn
                                                         None))(params, 
                                                                state, 
                                                                xs[:, :-1, ...], 
@@ -33,7 +34,8 @@ def ssm_dsm_loss(params, state, xs, times, x0, Sigmas, drifts, object_fn='Heng')
                                                                Sigmas[:, :-1, ...], 
                                                                drifts[:, :-1, ...], 
                                                                dt, 
-                                                               object_fn)
+                                                               object_fn,
+                                                               with_x0)
     
     print(loss.shape)
     if object_fn == 'Heng':
@@ -45,11 +47,14 @@ def ssm_dsm_loss(params, state, xs, times, x0, Sigmas, drifts, object_fn='Heng')
 
     return loss
         
-def single_step_loss(params, state, x_prev, x, t, x0, Sigma, Sigma_prev, drift_prev, dt, object_fn='Heng'):
+def single_step_loss(params, state, x_prev, x, t, x0, Sigma, Sigma_prev, drift_prev, dt, object_fn='Heng', with_x0=True):
     
         
     if object_fn == 'Heng':
-        pred_score = state.apply_fn(params, x, t, x0)
+        if with_x0:
+            pred_score = state.apply_fn(params, x, t, x0)
+        else:
+            pred_score = state.apply_fn(params, x, t)
         # Add regularization as in notebook
         Sigma_prev = Sigma_prev + 5e-4 * jnp.eye(Sigma_prev.shape[0])
         Sigma_prev_inv = jnp.linalg.solve(Sigma_prev, jnp.eye(Sigma_prev.shape[0]))
@@ -65,7 +70,7 @@ def single_step_loss(params, state, x_prev, x, t, x0, Sigma, Sigma_prev, drift_p
         loss = loss * dt 
     return loss
 # vmap over batch size, one batch's loss is mean at each timestep's loss
-def batched_single_step_loss(params, state, x_prev, x, t, x0, Sigma, Sigma_prev, drift_prev, dt, object_fn='Heng'):
+def batched_single_step_loss(params, state, x_prev, x, t, x0, Sigma, Sigma_prev, drift_prev, dt, object_fn='Heng', with_x0=True):
     batched_loss = jax.vmap(single_step_loss, in_axes=(None, #params
                                                         None, #state
                                                         0, #x_prev
@@ -76,7 +81,8 @@ def batched_single_step_loss(params, state, x_prev, x, t, x0, Sigma, Sigma_prev,
                                                         0, #Sigma_prev
                                                         0, #drift_prev
                                                         None, #dt
-                                                        None))(params, state, x_prev, x, t, x0, Sigma, Sigma_prev, drift_prev, dt, object_fn)
+                                                        None, #object_fn
+                                                        None))(params, state, x_prev, x, t, x0, Sigma, Sigma_prev, drift_prev, dt, object_fn, with_x0)
     return batched_loss
 
 
@@ -101,3 +107,8 @@ def batched_single_step_loss(params, state, x_prev, x, t, x0, Sigma, Sigma_prev,
 
 #     loss = 0.5 * dt * jnp.mean(jnp.sum(loss, axis=1))
 #     return loss
+
+
+
+
+                                                        
