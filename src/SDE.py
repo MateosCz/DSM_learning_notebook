@@ -152,10 +152,9 @@ class Time_Reversed_SDE(SDE):
             def sigma_comp(i):
                 sigma_i = lambda x: self.original_sde.diffusion_fn(x, t)[i]
                 return jnp.trace(jax.jacfwd(sigma_i)(x_i))
+                # return jnp.trace(jax.jacrev(sigma_i)(x_i))
             return jax.vmap(sigma_comp)(jnp.arange(x_i.shape[0]))
-        
         return jax.vmap(div_sigma_single)(x)
-    
 
 
 
