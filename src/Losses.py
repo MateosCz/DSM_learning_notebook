@@ -56,7 +56,7 @@ def single_step_loss(params, state, x_prev, x, t, x0, Sigma, Sigma_prev, drift_p
         else:
             pred_score = state.apply_fn(params, x, t)
         # Add regularization as in notebook
-        Sigma_prev = Sigma_prev + 5e-4 * jnp.eye(Sigma_prev.shape[0])
+        Sigma_prev = Sigma_prev + 1e-3 * jnp.eye(Sigma_prev.shape[0])
         Sigma_prev_inv = jnp.linalg.solve(Sigma_prev, jnp.eye(Sigma_prev.shape[0]))
         # Sigma_prev_inv = jnp.linalg.pinv(Sigma_prev)
         g_approx = -jnp.matmul(Sigma_prev_inv, (x - x_prev - dt * drift_prev))/dt

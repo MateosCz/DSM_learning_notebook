@@ -98,9 +98,10 @@ class SsmTrainer(Trainer):
 
 
 class NeuralOpTrainer(Trainer):
-    def __init__(self, seed: int = 0):
+    def __init__(self, seed: int = 0, landmark_num: int = 32):
         self.key_monitor = KeyMonitor(seed)
         self.object_fn = "Heng"
+        self.landmark_num = landmark_num
 
     def train_state_init(self, model: nn.Module, lr: float = 1e-3, model_kwargs: dict = {}):
         """Initialize training state for neural operator model
@@ -131,8 +132,8 @@ class NeuralOpTrainer(Trainer):
             tx=tx
         )
 
-    def _generate_batch(self, data_generator: DataGenerator, batch_size: int):
-        return data_generator.generate_data(batch_size)
+    def _generate_batch(self, data_generator: DataGenerator, landmark_num: int, batch_size: int):
+        return data_generator.generate_data(landmark_num, batch_size)
 
     @partial(jax.jit, static_argnums=(0, 3, 4))
     def _train_step(self, train_state: train_state.TrainState, x0: jnp.ndarray, sde: SDE, solver: SDESolver, solve_keys: jnp.ndarray):
@@ -167,7 +168,7 @@ class NeuralOpTrainer(Trainer):
 
     def train_epoch(self, train_state: train_state.TrainState, 
                    data_generator: DataGenerator, sde: SDE, solver: SDESolver, batch_size: int):
-        x0 = self._generate_batch(data_generator, batch_size)
+        x0 = self._generate_batch(data_generator, self.landmark_num, batch_size)
         solve_keys = self.key_monitor.split_keys(x0.shape[0])
         return self._train_step(train_state, x0, sde, solver, solve_keys)
 
