@@ -4,7 +4,7 @@ lagrange_sde_configs = {
     "sde_type": "lagrange",
     "sde_name": "kunita_lagrange_sde",
     "sde_params": {
-        "dt": 0.02,
+        "dt": 0.01,
         "k_alpha": [4.0, 3.0, 2.0, 1.0],
         "k_sigma": [1.5, 1.2, 1.0, 0.8],
     }

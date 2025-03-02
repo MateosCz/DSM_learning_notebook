@@ -14,10 +14,10 @@ class CircleDataGenerator(DataGenerator):
         self.key_monitor = KeyMonitor(seed)
 
     @partial(jax.jit, static_argnums=(0,))
-    def _generate_data_internal(self, keys: jnp.ndarray):
-        return generate_circle_datas(keys, self.landmark_num, self.radius, self.center)
+    def _generate_data_internal(self, keys: jnp.ndarray, landmark_num: int):
+        return generate_circle_datas(keys, landmark_num, self.radius, self.center)
 
-    def generate_data(self, batch_size: int):
+    def generate_data(self, landmark_num: int, batch_size: int):
         """Generate batch of data
         Args:
             key: PRNGKey for random number generation
@@ -58,13 +58,13 @@ class EllipseDataGenerator(DataGenerator):
         self.center = center
         self.key_monitor = KeyMonitor(seed)
 
-    @partial(jax.jit, static_argnums=(0,))
-    def _generate_data_internal(self, keys: jnp.ndarray):
-        return generate_ellipse_datas(keys, self.landmark_num, self.a, self.b, self.rotation_matrix, self.center)
+    @partial(jax.jit, static_argnums=(0,2))
+    def _generate_data_internal(self, keys: jnp.ndarray, landmark_num: int):
+        return generate_ellipse_datas(keys, landmark_num, self.a, self.b, self.rotation_matrix, self.center)
 
-    def generate_data(self, batch_size: int):
+    def generate_data(self, landmark_num: int, batch_size: int):
         keys = self.key_monitor.split_keys(batch_size)
-        return self._generate_data_internal(keys)
+        return self._generate_data_internal(keys, landmark_num)
 
 def generate_one_ellipse_data(key: jnp.ndarray, landmark_num: int, a: float, b: float, rotation_matrix: jnp.ndarray, center: jnp.ndarray):
     theta = jnp.linspace(0, 2 * jnp.pi, landmark_num+1)

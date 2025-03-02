@@ -7,6 +7,7 @@ import jax.random as jrandom
 from collections.abc import Callable
 from jax.typing import ArrayLike, DTypeLike
 import jax
+from typing import Optional
 
 
 class SDE(ABC):
@@ -139,14 +140,14 @@ Time reversed SDE, depend on the original SDE, induced by the doob's h transform
 Kolmogorov's backward equation
 '''
 class Time_Reversed_SDE(SDE):
-    def __init__(self, original_sde: SDE, score_fn: Callable[[jnp.ndarray, float], jnp.ndarray], total_time: float, dt: float):
+    def __init__(self, original_sde: SDE, score_fn: Callable[[jnp.ndarray, float], jnp.ndarray], total_time: float, dt: float, noise_size: Optional[int] = None):
         super().__init__()
         self.original_sde = original_sde
         self.score_fn = score_fn
         self.total_time = total_time
         self.dt = dt
         self.epsilon = 1e-5
-        self.noise_size = original_sde.noise_size
+        self.noise_size = noise_size if noise_size is not None else original_sde.noise_size
     def compute_div_sigma(self, x: jnp.ndarray, t: float) -> jnp.ndarray:
         def div_sigma_single(x_i):
             def sigma_comp(i):
