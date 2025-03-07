@@ -265,7 +265,7 @@ class TimeConv1D(nn.Module):
         x = jnp.einsum("ij,j,lk->li", weights, w_t, x)
         x = x + b_t
         if self.out_grid_sz is not None:
-            x = jax.image.resize(x, (self.out_grid_sz, self.out_co_dim), method="nearest")
+            x = jax.image.resize(x, (self.out_grid_sz, self.out_co_dim), method="bicubic")
         return x
     
 class TimeConv2D(nn.Module):
@@ -293,7 +293,7 @@ class TimeConv2D(nn.Module):
         x = jnp.einsum("ij,j,lmk->lmi", weights, w_t, x)
         x = x + b_t[None, None, :]
         if self.out_grid_sz is not None:
-            x = jax.image.resize(x, (self.out_grid_sz, self.out_grid_sz, self.out_co_dim), method="nearest")
+            x = jax.image.resize(x, (self.out_grid_sz, self.out_grid_sz, self.out_co_dim), method="bicubic")
         return x
 
 ### FNO Blocks ###
@@ -327,8 +327,8 @@ class CTUNOBlock1D(nn.Module):
             self.out_grid_sz,
         )(x, t_emb)
         x_out = x_spec_out + x_res_out
-        # if self.norm.lower() == "instance":
-        #     x_out = nn.InstanceNorm()(x_out)
+        if self.norm.lower() == "instance":
+            x_out = nn.LayerNorm()(x_out)
 
         return get_activation_fn(self.act)(x_out)
     

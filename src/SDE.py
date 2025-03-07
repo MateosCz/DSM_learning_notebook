@@ -160,17 +160,18 @@ class Time_Reversed_SDE(SDE):
 
 
     def drift_fn(self, x, t, x0):
+        jax.debug.print("score_fn: {0}", self.score_fn(x, self.total_time - t + self.dt, x0))
         def drift_fn_impl(x,t, x0):
-            drift = -self.original_sde.drift_fn(x, self.total_time - t) +\
-                    jnp.matmul(self.original_sde.Sigma(x, self.total_time - t), self.score_fn(x, self.total_time - t, x0))
-            div_sigma = self.compute_div_sigma(x, self.total_time - t)
+            drift = -self.original_sde.drift_fn(x, self.total_time - t + self.dt) +\
+                    jnp.matmul(self.original_sde.Sigma(x, self.total_time - t + self.dt), self.score_fn(x, self.total_time - t + self.dt, x0))
+            div_sigma = self.compute_div_sigma(x, self.total_time - t + self.dt)
             drift -= div_sigma
             return drift
  
         return drift_fn_impl(x, t, x0)
     
     def diffusion_fn(self, x, t):
-        return self.original_sde.diffusion_fn(x, self.total_time - t)
+        return self.original_sde.diffusion_fn(x, self.total_time - t + self.dt)
     def Sigma(self, x, t):
         return jnp.matmul(self.diffusion_fn(x, t), self.diffusion_fn(x, t).T)
 
