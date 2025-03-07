@@ -160,16 +160,85 @@ class Time_Reversed_SDE(SDE):
 
 
     def drift_fn(self, x, t, x0):
+        jax.debug.print("score_fn: {0}", self.score_fn(x, self.total_time - t + self.dt, x0))
         def drift_fn_impl(x,t, x0):
-            drift = -self.original_sde.drift_fn(x, self.total_time - t) +\
-                    jnp.matmul(self.original_sde.Sigma(x, self.total_time - t), self.score_fn(x, self.total_time - t, x0))
-            div_sigma = self.compute_div_sigma(x, self.total_time - t)
+            drift = -self.original_sde.drift_fn(x, self.total_time - t + self.dt) +\
+                    jnp.matmul(self.original_sde.Sigma(x, self.total_time - t + self.dt), self.score_fn(x, self.total_time - t + self.dt, x0))
+            div_sigma = self.compute_div_sigma(x, self.total_time - t + self.dt)
             drift -= div_sigma
             return drift
  
         return drift_fn_impl(x, t, x0)
     
     def diffusion_fn(self, x, t):
-        return self.original_sde.diffusion_fn(x, self.total_time - t)
+        return self.original_sde.diffusion_fn(x, self.total_time - t + self.dt)
+    def Sigma(self, x, t):
+        return jnp.matmul(self.diffusion_fn(x, t), self.diffusion_fn(x, t).T)
+
+
+class Kunita_Flow_SDE_3D(SDE):
+    '''
+    Kunita flow sde in 3D, dx = sigma(x, t) * dW
+    x dimension : (num_particles, 3) (R^d landmark position, d=3)
+    t dimension : (num_particles, 1) (time)
+    dw dimension : (num_particles, noize_size) (R^J wiener process, J = noize_size)
+    sigma dimension : (num_particles, 3, noize_size) (R^d x R^J matrix)
+    sigma(x, t) = kernel_fn(x, grid) * d_grid
+
+    '''
+    def __init__(self, sigma: DTypeLike, kappa: DTypeLike, grid_dim: int, grid_num: int, grid_range: Tuple[float, float], x0: jnp.ndarray):
+        super().__init__()
+        self.sigma = sigma
+        self.kappa = kappa
+        self.grid_dim = 3
+        self.grid_num = grid_num
+        self.grid_range = grid_range
+        self.noise_size = grid_num ** 3
+
+    def drift_fn(self, x, t):
+        return jnp.zeros_like(x)    
+
+    def diffusion_fn(self, x, t):
+        def Q_half(x, t):
+
+            # define the kernel function
+            kernel_fn = lambda x, y: self.sigma * jnp.exp(-0.5 * jnp.linalg.norm(x - y, axis=-1) ** 2 / self.kappa ** 2)
+            # compute the kernel matrix
+            Q_half = jax.vmap(jax.vmap(kernel_fn, in_axes=(0, None)), in_axes=(None, 0))(self.grid, x) * self.d_grid
+            # should we times a dy here?(or / grid_num)
+            # the integral(simulated) happens when we do the matrix multiplication in the sde solver, so here we just return the kernel matrix
+            return Q_half 
+        return Q_half(x, t)
+    
+    def Sigma(self, x, t):
+        return jnp.matmul(self.diffusion_fn(x, t), self.diffusion_fn(x, t).T)
+
+
+class Kunita_Laplacian_Beltrami_SDE(SDE):
+    '''
+    Kunita laplacian beltrami sde in 3D, dx = sigma(x, t) * dW
+    x dimension : (num_particles, 3) (R^d landmark position, d=3)
+    t dimension : (num_particles, 1) (time)
+    using the laplacian beltrami operator to define the kernel function
+    '''
+    def __init__(self, sigma: DTypeLike, kappa: DTypeLike, grid_dim: int, grid_num: int, grid_range: Tuple[float, float], x0: jnp.ndarray):
+        super().__init__()
+        self.sigma = sigma
+        self.kappa = kappa
+        self.grid_dim = 3
+        self.grid_num = grid_num
+        self.grid_range = grid_range
+
+    def drift_fn(self, x, t):
+        return jnp.zeros_like(x)    
+
+    def diffusion_fn(self, x, t):
+        def Q_half(x, t):
+            # define the kernel function by the laplacian beltrami operator
+            def laplacian_beltrami_kernel_fn(x, y):
+                return self.sigma * jnp.exp(-0.5 * jnp.linalg.norm(x - y, axis=-1) ** 2 / self.kappa ** 2)
+            Q_half = jax.vmap(jax.vmap(laplacian_beltrami_kernel_fn, in_axes=(0, None)), in_axes=(None, 0))(self.grid, x) * self.d_grid
+            return Q_half 
+        return Q_half(x, t)
     def Sigma(self, x, t):
         return jnp.matmul(self.diffusion_fn(x, t), self.diffusion_fn(x, t).T)

@@ -3,12 +3,15 @@ import jax.numpy as jnp
 import jax
 import matplotlib.collections as mcoll
 
-def plot_trajectory_2d(trajectory, title, simplified=True):
+def plot_trajectory_2d(trajectory, title, trajectory_alpha=0.8, start_shape_name='start', end_shape_name='end', simplified=True):
     # trajectory: (time_steps, landmark_num, 2)
     fig, ax = plt.subplots()
     color_range = jnp.linspace(0, 1, trajectory.shape[0])
     # adjust the point size by the landmark number
     point_size = 6 + 2 * jnp.arange(trajectory.shape[1])
+
+    # adjust the size of the plot by the landmark number
+    fig.set_size_inches(10, 10)
     # color_range = jnp.flip(color_range)
     if not simplified:
         for i in range(trajectory.shape[1]):  # iterate over landmark number dimension
@@ -16,23 +19,32 @@ def plot_trajectory_2d(trajectory, title, simplified=True):
             y = trajectory[:,i,1]
             # Reshape segments to be pairs of points
             points = jnp.stack([x, y], axis=1)  # shape: (time_steps, 2)
-            segments = jnp.stack([points[:-1], points[1:]], axis=1)  # shape: (time_steps-1, 2, 2)
+            segments = jnp.stack([points[:-1], points[1:]], axis=1)  # shape: (time_steps-1, 2, 2)      
         
-            lc = mcoll.LineCollection(segments, cmap=plt.cm.coolwarm, alpha=0.8)
+            lc = mcoll.LineCollection(segments, cmap=plt.cm.coolwarm, alpha=trajectory_alpha)
             lc.set_array(color_range[:-1])  # one less than points due to segments
             ax.add_collection(lc)
         # plot the shape of the starting point and the ending point and connect them
-        ax.plot(trajectory[0, :, 0], trajectory[0, :, 1], 'o', color=plt.cm.coolwarm(color_range[0]), alpha=0.9, markersize=6)
-        ax.plot(trajectory[-1, :, 0], trajectory[-1, :, 1], 'o', color=plt.cm.coolwarm(color_range[-1]), alpha=0.9, markersize=6)
-        ax.plot(trajectory[0, :, 0], trajectory[0, :, 1], '-', color=plt.cm.coolwarm(color_range[0]), alpha=0.9)
-        ax.plot(trajectory[-1, :, 0], trajectory[-1, :, 1], '-', color=plt.cm.coolwarm(color_range[-1]), alpha=0.9)
+        ax.plot(trajectory[0, :, 0], trajectory[0, :, 1], 'o', color=plt.cm.coolwarm(color_range[0]), alpha=0.9, markersize=4)
+        ax.plot(trajectory[-1, :, 0], trajectory[-1, :, 1], 'o', color=plt.cm.coolwarm(color_range[-1]), alpha=0.9, markersize=4)
+        
+        # add yellow cross mark to make the starting point and the ending point more visible
+        ax.plot(trajectory[0, :, 0], trajectory[0, :, 1], '+', color='yellow', alpha=0.7, markersize=6)
+        ax.plot(trajectory[-1, :, 0], trajectory[-1, :, 1], '+', color='yellow', alpha=0.7, markersize=6)
 
+        ax.plot(trajectory[0, :, 0], trajectory[0, :, 1], '-', color=plt.cm.coolwarm(color_range[0]), alpha=0.9, label=start_shape_name)
+        ax.plot(trajectory[-1, :, 0], trajectory[-1, :, 1], '-', color=plt.cm.coolwarm(color_range[-1]), alpha=0.9, label=end_shape_name)
+        
         start_point_x0 = jnp.array([trajectory[0, 0, 0], trajectory[0, 0, 1]])
         end_point_x0 = jnp.array([trajectory[0, -1, 0], trajectory[0, -1, 1]])
         start_point_xT = jnp.array([trajectory[-1, 0, 0], trajectory[-1, 0, 1]])
         end_point_xT = jnp.array([trajectory[-1, -1, 0], trajectory[-1, -1, 1]])
         envelope_x0 = jnp.array([start_point_x0, end_point_x0])
         envelope_xT = jnp.array([start_point_xT, end_point_xT])
+        # add label to the starting point and the ending point
+        # ax.text(start_point_x0[0], start_point_x0[1], start_shape_name, color=plt.cm.coolwarm(color_range[0]), alpha=0.9)
+        # ax.text(end_point_x0[0], end_point_x0[1], end_shape_name, color=plt.cm.coolwarm(color_range[-1]), alpha=0.9)
+        ax.legend()
         ax.plot(envelope_x0[:, 0], envelope_x0[:, 1], '-', color=plt.cm.coolwarm(color_range[0]), alpha=0.7)
         ax.plot(envelope_xT[:, 0], envelope_xT[:, 1], '-', color=plt.cm.coolwarm(color_range[-1]), alpha=0.7)
         
@@ -41,12 +53,16 @@ def plot_trajectory_2d(trajectory, title, simplified=True):
         cbar.set_label('Time')
     else:
         for i in range(trajectory.shape[1]):  # iterate over landmark number dimension
-            ax.plot(trajectory[:,i,0], trajectory[:,i,1], '-', color='orange', alpha=0.5)
+            ax.plot(trajectory[:,i,0], trajectory[:,i,1], '-', color='orange', alpha=trajectory_alpha)
         # plot the shape of the starting point and the ending point and connect them
         ax.plot(trajectory[0, :, 0], trajectory[0, :, 1], 'o', color=plt.cm.coolwarm(color_range[0]), alpha=0.7, markersize=6)
         ax.plot(trajectory[-1, :, 0], trajectory[-1, :, 1], 'o', color=plt.cm.coolwarm(color_range[-1]), alpha=0.7, markersize=6)
-        ax.plot(trajectory[0, :, 0], trajectory[0, :, 1], '-', color=plt.cm.coolwarm(color_range[0]), alpha=0.7)# connect the landmarks at the start time
-        ax.plot(trajectory[-1, :, 0], trajectory[-1, :, 1], '-', color=plt.cm.coolwarm(color_range[-1]), alpha=0.7)# connect the landmarks at the end time
+        # add yellow cross mark to make the starting point and the ending point more visible
+        ax.plot(trajectory[0, :, 0], trajectory[0, :, 1], '+', color='yellow', alpha=0.7, markersize=6)
+        ax.plot(trajectory[-1, :, 0], trajectory[-1, :, 1], '+', color='yellow', alpha=0.7, markersize=6)
+
+        ax.plot(trajectory[0, :, 0], trajectory[0, :, 1], '-', color=plt.cm.coolwarm(color_range[0]), alpha=0.7, label=start_shape_name)# connect the landmarks at the start time
+        ax.plot(trajectory[-1, :, 0], trajectory[-1, :, 1], '-', color=plt.cm.coolwarm(color_range[-1]), alpha=0.7, label=end_shape_name)# connect the landmarks at the end time
         # envelope the start and end points
         start_point_x0 = jnp.array([trajectory[0, 0, 0], trajectory[0, 0, 1]])
         end_point_x0 = jnp.array([trajectory[0, -1, 0], trajectory[0, -1, 1]])
@@ -54,6 +70,8 @@ def plot_trajectory_2d(trajectory, title, simplified=True):
         end_point_xT = jnp.array([trajectory[-1, -1, 0], trajectory[-1, -1, 1]])
         envelope_x0 = jnp.array([start_point_x0, end_point_x0])
         envelope_xT = jnp.array([start_point_xT, end_point_xT])
+        # add label to the starting point and the ending point and place the label at the corner of the plot
+        ax.legend()
         ax.plot(envelope_x0[:, 0], envelope_x0[:, 1], '-', color=plt.cm.coolwarm(color_range[0]), alpha=0.7)
         ax.plot(envelope_xT[:, 0], envelope_xT[:, 1], '-', color=plt.cm.coolwarm(color_range[-1]), alpha=0.7)
 
