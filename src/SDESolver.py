@@ -120,6 +120,9 @@ class EulerMaruyama:
             else:
                 drift = self.drift_fn(x, t)
             diffusion = self.diffusion_fn(x, t)
+            print(diffusion.shape)
+            print(dW.shape)
+            
             x_next = x + drift * self.dt + jnp.einsum('ij,jk->ik', diffusion, dW)
             if self.debug_mode:
                 jax.debug.print("t: {t}", t=t)
