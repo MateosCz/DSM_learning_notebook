@@ -89,42 +89,21 @@ class SphereDataGenerator(DataGenerator):
         self.center = center
         self.key_monitor = KeyMonitor(seed)
 
-    @partial(jax.jit, static_argnums=(0, 2))  # Make landmark_num static
-    def _generate_data_internal(self, keys: jnp.ndarray, landmark_num: int):
-        return jax.vmap(fibonacci_sphere_points, in_axes=(0, None, None, None))(keys, landmark_num, self.radius, self.center)
+    @partial(jax.jit, static_argnums=(0, 1))  # Make landmark_num static
+    def _generate_data_internal(self, landmark_num: int):
+        return fibonacci_sphere_points(landmark_num, self.radius, self.center)
 
     def generate_data(self, landmark_num: int, batch_size: int):
-        keys = self.key_monitor.split_keys(batch_size)
-        return self._generate_data_internal(keys, landmark_num)
+        # 生成一个完整的球面点集
+        sphere_points = self._generate_data_internal(landmark_num)
+        
+        # 创建一个批次数组，每个批次都包含相同的完整球面
+        result = jnp.tile(sphere_points[None, :, :], (batch_size, 1, 1))
+        
+        return result
 
-@partial(jax.jit, static_argnums=(1))  # Make landmark_num static
-def generate_one_sphere_data(key: jnp.ndarray, landmark_num: int, radius: float, center: jnp.ndarray):
-    theta = jnp.linspace(0, 2 * jnp.pi, landmark_num+1)
-    phi = jnp.linspace(0, jnp.pi, landmark_num+1)
-    x = radius * jnp.cos(theta) * jnp.sin(phi) + center[0]
-    y = radius * jnp.sin(theta) * jnp.sin(phi) + center[1]
-    z = radius * jnp.cos(phi) + center[2]
-    sphere_v = jnp.stack([x, y, z], axis=-1)
-    sphere_v = sphere_v[:-1]
-    faces = []
-    for i in range(landmark_num - 1):
-        for j in range(landmark_num):
-            j_next = (j + 1) % landmark_num
-            v0 = i * landmark_num + j
-            v1 = i * landmark_num + j_next
-            v2 = (i + 1) * landmark_num + j
-            v3 = (i + 1) * landmark_num + j_next
-            faces.extend([[v0, v1, v2], [v2, v1, v3]])
-    return sphere_v, jnp.array(faces)
-
-@partial(jax.jit, static_argnums=(1))  # Make landmark_num static
-def generate_sphere_datas(keys: jnp.ndarray, landmark_num: int, radius: float, center: jnp.ndarray):
-    return jax.vmap(generate_one_sphere_data, in_axes=(0, None, None, None))(
-        keys, landmark_num, radius, center)
-
-
-@partial(jax.jit, static_argnums=(1,2))
-def fibonacci_sphere_points(key: jnp.ndarray, n_points, radius=1.0, center=jnp.array([0.0, 0.0, 0.0])):
+@partial(jax.jit, static_argnums=(0,1))
+def fibonacci_sphere_points(n_points, radius=1.0, center=jnp.array([0.0, 0.0, 0.0])):
     """Generate more evenly distributed points using Fibonacci spiral method."""
     # Constants for golden ratio calculation
     phi = jnp.pi * (3.0 - jnp.sqrt(5.0))
@@ -147,6 +126,256 @@ def fibonacci_sphere_points(key: jnp.ndarray, n_points, radius=1.0, center=jnp.a
     
     # Stack coordinates and scale by radius
     points = jnp.column_stack([x, y, z]) * radius + center
+    return points
+class ManifoldDataGenerator(DataGenerator):
+    def __init__(self, grid_size: int, manifold_type: str = "torus", seed: int = 0):
+        super().__init__()
+        self.grid_size = grid_size
+        self.manifold_type = manifold_type
+        self.key_monitor = KeyMonitor(seed)
+
+    @partial(jax.jit, static_argnums=(0, 1, 2))  # Make grid_size and manifold_type static
+    def _generate_data_internal(self, grid_size: int, manifold_type: str):
+        return parametric_surface(grid_size, manifold_type)
+
+    def generate_data(self, grid_size: int, batch_size: int):
+        # 生成一个完整的流形点集
+        manifold_points = self._generate_data_internal(grid_size, self.manifold_type)
+        
+        # 创建一个批次数组，每个批次都包含相同的完整流形
+        result = jnp.tile(manifold_points[None, :, :], (batch_size, 1, 1))
+        
+        return result
+
+@partial(jax.jit, static_argnums=(0, 1))
+def parametric_surface(grid_size, manifold_type="torus"):
+    """
+    Generate points on a 2D manifold embedded in 3D space.
+    
+    Args:
+        grid_size: Number of points in each parametric direction (u,v)
+        manifold_type: Type of manifold ("torus", "cylinder", "mobius", etc.)
+    
+    Returns:
+        Array of 3D points representing the manifold
+    """
+    # Create parameter grid
+    u = jnp.linspace(0, 2 * jnp.pi, grid_size)
+    v = jnp.linspace(0, 2 * jnp.pi, grid_size)
+    u_grid, v_grid = jnp.meshgrid(u, v)
+    
+    # Flatten for easier processing
+    u_flat = u_grid.flatten()
+    v_flat = v_grid.flatten()
+    
+    # Initialize coordinates array
+    n_points = grid_size * grid_size
+    points = jnp.zeros((n_points, 3))
+    
+    # Apply the appropriate parametrization based on manifold type
+    if manifold_type == "torus":
+        # Torus parameters
+        R = 2.0  # Major radius
+        r = 0.5  # Minor radius
+        
+        # Parametric equations for torus
+        x = (R + r * jnp.cos(v_flat)) * jnp.cos(u_flat)
+        y = (R + r * jnp.cos(v_flat)) * jnp.sin(u_flat)
+        z = r * jnp.sin(v_flat)
+        
+    elif manifold_type == "cylinder":
+        # Cylinder parameters
+        R = 1.0  # Radius
+        height = 2.0
+        
+        # Parametric equations for cylinder
+        x = R * jnp.cos(u_flat)
+        y = R * jnp.sin(u_flat)
+        z = height * (v_flat / (2 * jnp.pi) - 0.5)
+        
+    elif manifold_type == "mobius":
+        # Möbius strip parameters
+        R = 2.0  # Major radius
+        width = 0.5  # Width of the strip
+        
+        # Parametric equations for Möbius strip
+        # Remap v to [-width/2, width/2]
+        v_mapped = width * (v_flat / (2 * jnp.pi) - 0.5)
+        
+        x = (R + v_mapped * jnp.cos(u_flat/2)) * jnp.cos(u_flat)
+        y = (R + v_mapped * jnp.cos(u_flat/2)) * jnp.sin(u_flat)
+        z = v_mapped * jnp.sin(u_flat/2)
+    
+    elif manifold_type == "klein_bottle":
+        # Klein bottle parameters
+        R = 2.0
+        
+        # Parametric equations for Klein bottle (one immersion in 3D)
+        # Remap parameters for easier equations
+        u_mapped = u_flat * 2  # [0, 4π]
+        v_mapped = v_flat      # [0, 2π]
+        
+        x = jnp.where(
+            u_mapped < 2 * jnp.pi,
+            (R + jnp.cos(v_mapped)) * jnp.cos(u_mapped),
+            (R + jnp.cos(v_mapped)) * jnp.cos(u_mapped)
+        )
+        
+        y = jnp.where(
+            u_mapped < 2 * jnp.pi,
+            (R + jnp.cos(v_mapped)) * jnp.sin(u_mapped),
+            (R + jnp.cos(v_mapped)) * jnp.sin(u_mapped)
+        )
+        
+        z = jnp.where(
+            u_mapped < 2 * jnp.pi,
+            jnp.sin(v_mapped),
+            -jnp.sin(v_mapped)
+        )
+        
+    else:  # Default to a simple plane
+        # Plane parameters
+        size = 2.0
+        
+        # Remap parameters to [-size, size]
+        u_mapped = size * (u_flat / (2 * jnp.pi) - 0.5) * 2
+        v_mapped = size * (v_flat / (2 * jnp.pi) - 0.5) * 2
+        
+        # Parametric equations for plane
+        x = u_mapped
+        y = v_mapped
+        z = jnp.zeros_like(u_mapped)
+    
+    # Combine coordinates
+    points = jnp.column_stack([x, y, z])
+    return points
+
+class ManifoldDataGenerator2D(DataGenerator):
+    def __init__(self, grid_size: int, manifold_type: str = "torus", seed: int = 0):
+        super().__init__()
+        self.grid_size = grid_size
+        self.manifold_type = manifold_type
+        self.key_monitor = KeyMonitor(seed)
+
+    @partial(jax.jit, static_argnums=(0, 1, 2))  # Make grid_size and manifold_type static
+    def _generate_data_internal(self, grid_size: int, manifold_type: str):
+        return parametric_surface_2Dmanifold(grid_size, manifold_type)
+
+    def generate_data(self, grid_size: int, batch_size: int):
+        # 生成一个完整的流形点集
+        manifold_points = self._generate_data_internal(grid_size, self.manifold_type)
+        
+        # 重塑为 (grid_size, grid_size, 3) 以保持网格结构
+        manifold_points = manifold_points.reshape(grid_size, grid_size, 3)
+        
+        # 创建一个批次数组，每个批次都包含相同的完整流形
+        result = jnp.tile(manifold_points[None, :, :, :], (batch_size, 1, 1, 1))
+        
+        return result  # 形状为 (batch_size, grid_size, grid_size, 3)
+
+@partial(jax.jit, static_argnums=(0, 1))
+def parametric_surface_2Dmanifold(grid_size, manifold_type="torus"):
+    """
+    Generate points on a 2D manifold embedded in 3D space.
+    
+    Args:
+        grid_size: Number of points in each parametric direction (u,v)
+        manifold_type: Type of manifold ("torus", "cylinder", "mobius", etc.)
+    
+    Returns:
+        Array of 3D points representing the manifold, shape (grid_size*grid_size, 3)
+    """
+    # Create parameter grid
+    u = jnp.linspace(0, 2 * jnp.pi, grid_size)
+    v = jnp.linspace(0, 2 * jnp.pi, grid_size)
+    u_grid, v_grid = jnp.meshgrid(u, v)
+    
+    # Flatten for easier processing
+    u_flat = u_grid.flatten()
+    v_flat = v_grid.flatten()
+    
+    # Initialize coordinates array
+    n_points = grid_size * grid_size
+    
+    # Apply the appropriate parametrization based on manifold type
+    if manifold_type == "torus":
+        # Torus parameters
+        R = 2.0  # Major radius
+        r = 0.5  # Minor radius
+        
+        # Parametric equations for torus
+        x = (R + r * jnp.cos(v_flat)) * jnp.cos(u_flat)
+        y = (R + r * jnp.cos(v_flat)) * jnp.sin(u_flat)
+        z = r * jnp.sin(v_flat)
+        
+    elif manifold_type == "cylinder":
+        # Cylinder parameters
+        R = 1.0  # Radius
+        height = 2.0
+        
+        # Parametric equations for cylinder
+        x = R * jnp.cos(u_flat)
+        y = R * jnp.sin(u_flat)
+        z = height * (v_flat / (2 * jnp.pi) - 0.5)
+        
+    elif manifold_type == "mobius":
+        # Möbius strip parameters
+        R = 2.0  # Major radius
+        width = 0.5  # Width of the strip
+        
+        # Parametric equations for Möbius strip
+        # Remap v to [-width/2, width/2]
+        v_mapped = width * (v_flat / (2 * jnp.pi) - 0.5)
+        
+        x = (R + v_mapped * jnp.cos(u_flat/2)) * jnp.cos(u_flat)
+        y = (R + v_mapped * jnp.cos(u_flat/2)) * jnp.sin(u_flat)
+        z = v_mapped * jnp.sin(u_flat/2)
+    
+    elif manifold_type == "klein_bottle":
+        # Klein bottle parameters
+        R = 2.0
+        
+        # Parametric equations for Klein bottle (one immersion in 3D)
+        # Remap parameters for easier equations
+        u_mapped = u_flat * 2  # [0, 4π]
+        v_mapped = v_flat      # [0, 2π]
+        
+        # 修正Klein bottle的参数方程
+        condition = u_mapped < 2 * jnp.pi
+        
+        x = jnp.where(
+            condition,
+            (R + jnp.cos(v_mapped)) * jnp.cos(u_mapped),
+            (R - jnp.cos(v_mapped)) * jnp.cos(u_mapped - 2 * jnp.pi)
+        )
+        
+        y = jnp.where(
+            condition,
+            (R + jnp.cos(v_mapped)) * jnp.sin(u_mapped),
+            (R - jnp.cos(v_mapped)) * jnp.sin(u_mapped - 2 * jnp.pi)
+        )
+        
+        z = jnp.where(
+            condition,
+            jnp.sin(v_mapped),
+            -jnp.sin(v_mapped)
+        )
+        
+    else:  # Default to a simple plane
+        # Plane parameters
+        size = 2.0
+        
+        # Remap parameters to [-size, size]
+        u_mapped = size * (u_flat / (2 * jnp.pi) - 0.5) * 2
+        v_mapped = size * (v_flat / (2 * jnp.pi) - 0.5) * 2
+        
+        # Parametric equations for plane
+        x = u_mapped
+        y = v_mapped
+        z = jnp.zeros_like(u_mapped)
+    
+    # Combine coordinates
+    points = jnp.column_stack([x, y, z])
     return points
 # class SphereDataGenerator:
 #     """使用libigl和JAX生成球面数据的类"""

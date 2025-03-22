@@ -8,7 +8,7 @@ from collections.abc import Callable
 from jax.typing import ArrayLike, DTypeLike
 import jax
 from typing import Optional
-
+from jax import vmap, jit, lax
 
 class SDE(ABC):
 
@@ -227,6 +227,102 @@ class Kunita_Flow_SDE_3D_Eulerian(SDE):
         return jnp.matmul(self.diffusion_fn(x, t), self.diffusion_fn(x, t).T)
 
 
+class Kunita_Flow_SDE_3D_Eulerian_Optimized(SDE):
+    '''
+    优化版本的Kunita flow SDE in 3D, dx = sigma(x, t) * dW
+    使用批处理和内存高效的算法来减少内存使用
+    
+    x dimension : (num_particles, 3) (R^d landmark position, d=3)
+    t dimension : (num_particles, 1) (time)
+    dw dimension : (num_particles, noize_size) (R^J wiener process, J = noize_size)
+    sigma dimension : (num_particles, 3, noize_size) (R^d x R^J matrix)
+    sigma(x, t) = kernel_fn(x, grid) * d_grid
+    '''
+    def __init__(self, k_alpha: DTypeLike, k_sigma: DTypeLike, grid_num: int, 
+                 grid_range: Tuple[float, float], x0: jnp.ndarray, batch_size: int = 1024):
+        super().__init__()
+        self.k_alpha = k_alpha
+        self.k_sigma = k_sigma
+        self.grid_dim = 3
+        self.grid_num = grid_num
+        self.grid_range = grid_range
+        self.noise_size = grid_num ** 3
+        self.d_grid = ((grid_range[1]-grid_range[0]) / grid_num) ** 3  # 小立方体网格体积
+        self.batch_size = batch_size  # 批处理大小
+        
+        # # 预编译一些函数以提高性能
+        # self._compute_kernel = jit(self._kernel_function)
+        # self._batched_kernel = jit(vmap(self._kernel_function, in_axes=(0, None)))
+
+    @property
+    def grid(self):
+
+        grid_x = jnp.linspace(*self.grid_range, self.grid_num)
+        grid_y = jnp.linspace(*self.grid_range, self.grid_num)
+        grid_z = jnp.linspace(*self.grid_range, self.grid_num)
+        grid_x, grid_y, grid_z = jnp.meshgrid(grid_x, grid_y, grid_z, indexing='xy')
+        grid = jnp.stack([grid_x, grid_y, grid_z], axis=-1)
+        grid = grid.reshape(-1, 3)
+        return grid
+
+    def drift_fn(self, x, t):
+        return jnp.zeros_like(x)
+
+    def _kernel_function(self, x: jnp.ndarray, y: jnp.ndarray) -> jnp.ndarray:
+        """计算单对点之间的核函数值"""
+        # x: (3,), y: (3,)
+        return self.k_alpha * jnp.exp(-0.5 * jnp.sum((x - y) ** 2) / (self.k_sigma ** 2))
+
+    def _diffusion_batch(self, x_batch: jnp.ndarray, grid_batch: jnp.ndarray) -> jnp.ndarray:
+        """批量计算扩散函数的一部分"""
+        # x_batch: (batch_size_x, 3), grid_batch: (batch_size_grid, 3)
+        # 返回: (batch_size_x, batch_size_grid)
+        return vmap(lambda x: vmap(lambda g: self._kernel_function(x, g))(grid_batch))(x_batch)
+
+    def diffusion_fn(self, x, t):
+        """
+        优化的扩散函数，使用批处理来减少内存使用
+        
+        参数:
+            x: 位置，形状为 (num_particles, 3)
+            t: 时间，形状为 (num_particles, 1)
+            
+        返回:
+            Q_half: 形状为 (num_particles, noise_size)
+        """
+        num_particles = x.shape[0]
+        grid = self.grid  # (grid_num^3, 3)
+        
+        # 初始化结果矩阵
+        Q_half = jnp.zeros((num_particles, self.noise_size))
+        
+        # 批处理粒子
+        for i in range(0, num_particles, self.batch_size):
+            end_i = min(i + self.batch_size, num_particles)
+            x_batch = x[i:end_i]  # (batch_size_x, 3)
+            
+            # 为当前粒子批次构建Q_half的部分
+            batch_result = jnp.zeros((end_i - i, self.noise_size))
+            
+            # 批处理网格点
+            for j in range(0, self.noise_size, self.batch_size):
+                end_j = min(j + self.batch_size, self.noise_size)
+                grid_batch = grid[j:end_j]  # (batch_size_grid, 3)
+                
+                # 计算当前批次的核函数值
+                kernel_values = self._diffusion_batch(x_batch, grid_batch)  # (batch_size_x, batch_size_grid)
+                
+                # 更新结果 - 确保形状匹配
+                batch_result = batch_result.at[:, j:end_j].set(kernel_values)
+            
+            # 将当前批次的结果放入完整结果中
+            Q_half = Q_half.at[i:end_i].set(batch_result * self.d_grid)
+        
+        return Q_half
+
+    def Sigma(self, x, t):
+        return jnp.matmul(self.diffusion_fn(x, t), self.diffusion_fn(x, t).T)
+
 class Kunita_Laplacian_Beltrami_SDE(SDE):
     '''
     Kunita laplacian beltrami sde in 3D, dx = sigma(x, t) * dW
@@ -255,3 +351,20 @@ class Kunita_Laplacian_Beltrami_SDE(SDE):
         return Q_half(x, t)
     def Sigma(self, x, t):
         return jnp.matmul(self.diffusion_fn(x, t), self.diffusion_fn(x, t).T)
+
+# Function to extract leaf butterfly landmarks
+def extract_leaf_butterfly_landmarks(landmarks):
+    """
+    Extract butterfly landmarks without nodes that start with 'xx'
+    
+    Args:
+        landmarks: DataFrame containing butterfly landmarks with 'node_names' column
+        
+    Returns:
+        DataFrame with only leaf butterfly landmarks (no 'xx' prefixed nodes)
+    """
+    # Create a mask for rows where node_names don't start with 'xx'
+    mask = ~landmarks['node_names'].str.startswith('xx')
+    
+    # Return filtered DataFrame
+    return landmarks[mask].reset_index(drop=True)

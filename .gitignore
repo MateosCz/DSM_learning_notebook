@@ -1,2 +1,11 @@
 data/Load_Reconstructions_papilio.ipynb
 data/butterflies/papilio_shapes.csv
+data/beaks/Load_Reconstructions_beaks.ipynb
+data/beaks/Load_Reconstructions_beaks.ipynb:Zone.Identifier
+data/beaks/PROC_LANDMARKS_090125.csv:Zone.Identifier
+data/beaks/PROC_LANDMARKS_090125.csv
+data/beaks/RAW_LANDMARKS_090125.csv
+data/beaks/RAW_LANDMARKS_090125.csv:Zone.Identifier
+*.csv
+data/**
+

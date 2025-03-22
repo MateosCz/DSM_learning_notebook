@@ -168,3 +168,169 @@ def plot_matrix(matrix, title):
     ax.set_title(title)
     plt.colorbar(im, ax=ax)
     plt.show()
+
+
+    
+    
+def plot_trajectory_3d(trajectory, title, trajectory_alpha=0.8, start_shape_name='start', end_shape_name='end', simplified=True, perspective='auto'):
+    # trajectory: (time_steps, landmark_num, 3) - 3D trajectory
+    fig = plt.figure(figsize=(10, 10))
+    ax = fig.add_subplot(111, projection='3d')  # Create a 3D subplot
+    color_range = jnp.linspace(0, 1, trajectory.shape[0])
+    if perspective == 'auto':
+        pass
+    elif perspective == 'x':
+        ax.view_init(elev=0, azim=0) 
+    elif perspective == 'y':
+        ax.view_init(elev=0, azim=90)
+    elif perspective == 'z':
+        ax.view_init(elev=90, azim=0)
+        
+    if not simplified:
+        for i in range(trajectory.shape[1]):  # iterate over landmark number dimension
+            x = trajectory[:,i,0]
+            y = trajectory[:,i,1]
+            z = trajectory[:,i,2]
+            
+            # Plot the trajectory line for each landmark
+            points = jnp.column_stack([x, y, z])
+            ax.plot(x, y, z, '-', color='orange', alpha=trajectory_alpha)
+            
+            # Color the line according to time
+            for t in range(len(x)-1):
+                ax.plot(x[t:t+2], y[t:t+2], z[t:t+2], color=plt.cm.coolwarm(color_range[t]), alpha=trajectory_alpha)
+        
+        # Plot start and end points
+        ax.scatter(trajectory[0, :, 0], trajectory[0, :, 1], trajectory[0, :, 2], 
+                  color=plt.cm.coolwarm(color_range[0]), alpha=0.9, s=30, marker='o')
+        ax.scatter(trajectory[-1, :, 0], trajectory[-1, :, 1], trajectory[-1, :, 2], 
+                  color=plt.cm.coolwarm(color_range[-1]), alpha=0.9, s=30, marker='o')
+        
+        # Add yellow markers to make start/end points more visible
+        ax.scatter(trajectory[0, :, 0], trajectory[0, :, 1], trajectory[0, :, 2], 
+                  color='yellow', alpha=0.7, s=40, marker='+')
+        ax.scatter(trajectory[-1, :, 0], trajectory[-1, :, 1], trajectory[-1, :, 2], 
+                  color='yellow', alpha=0.7, s=40, marker='+')
+        
+        # # Connect landmarks at start and end times
+        # for i in range(trajectory.shape[1]-1):
+        #     # Connect start shape
+        #     ax.plot([trajectory[0, i, 0], trajectory[0, i+1, 0]], 
+        #             [trajectory[0, i, 1], trajectory[0, i+1, 1]], 
+        #             [trajectory[0, i, 2], trajectory[0, i+1, 2]], 
+        #             '-', color=plt.cm.coolwarm(color_range[0]), alpha=0.9)
+            
+        #     # Connect end shape
+        #     ax.plot([trajectory[-1, i, 0], trajectory[-1, i+1, 0]], 
+        #             [trajectory[-1, i, 1], trajectory[-1, i+1, 1]], 
+        #             [trajectory[-1, i, 2], trajectory[-1, i+1, 2]], 
+        #             '-', color=plt.cm.coolwarm(color_range[-1]), alpha=0.9)
+        
+        # Add a colorbar
+        cbar = plt.colorbar(plt.cm.ScalarMappable(cmap=plt.cm.coolwarm), ax=ax, orientation='vertical')
+        cbar.set_label('Time')
+        
+        # Add legend
+        ax.scatter([], [], [], color=plt.cm.coolwarm(color_range[0]), marker='o', 
+                  s=30, label=start_shape_name)
+        ax.scatter([], [], [], color=plt.cm.coolwarm(color_range[-1]), marker='o', 
+                  s=30, label=end_shape_name)
+        ax.legend()
+        
+    else:
+        # Simplified version
+        for i in range(trajectory.shape[1]):  # iterate over landmark number dimension
+            ax.plot(trajectory[:,i,0], trajectory[:,i,1], trajectory[:,i,2], 
+                   '-', color='orange', alpha=trajectory_alpha)
+        
+        # Plot start and end points
+        ax.scatter(trajectory[0, :, 0], trajectory[0, :, 1], trajectory[0, :, 2], 
+                  color=plt.cm.coolwarm(color_range[0]), alpha=0.7, s=40, marker='o')
+        ax.scatter(trajectory[-1, :, 0], trajectory[-1, :, 1], trajectory[-1, :, 2], 
+                  color=plt.cm.coolwarm(color_range[-1]), alpha=0.7, s=40, marker='o')
+        
+        # Add yellow markers
+        ax.scatter(trajectory[0, :, 0], trajectory[0, :, 1], trajectory[0, :, 2], 
+                  color='yellow', alpha=0.7, s=40, marker='+')
+        ax.scatter(trajectory[-1, :, 0], trajectory[-1, :, 1], trajectory[-1, :, 2], 
+                  color='yellow', alpha=0.7, s=40, marker='+')
+        
+        # # Connect landmarks at start and end times
+        # for i in range(trajectory.shape[1]-1):
+        #     # Connect start shape
+        #     ax.plot([trajectory[0, i, 0], trajectory[0, i+1, 0]], 
+        #             [trajectory[0, i, 1], trajectory[0, i+1, 1]], 
+        #             [trajectory[0, i, 2], trajectory[0, i+1, 2]], 
+        #             '-', color=plt.cm.coolwarm(color_range[0]), alpha=0.7)
+            
+        #     # Connect end shape
+        #     ax.plot([trajectory[-1, i, 0], trajectory[-1, i+1, 0]], 
+        #             [trajectory[-1, i, 1], trajectory[-1, i+1, 1]], 
+        #             [trajectory[-1, i, 2], trajectory[-1, i+1, 2]], 
+        #             '-', color=plt.cm.coolwarm(color_range[-1]), alpha=0.7)
+        
+        # Add legend
+        ax.scatter([], [], [], color=plt.cm.coolwarm(color_range[0]), marker='o', 
+                  s=30, label=start_shape_name)
+        ax.scatter([], [], [], color=plt.cm.coolwarm(color_range[-1]), marker='o', 
+                  s=30, label=end_shape_name)
+        ax.legend()
+    
+    ax.set_title(title)
+    ax.set_xlabel('X')
+    ax.set_ylabel('Y')
+    ax.set_zlabel('Z')
+    
+    # Set equal aspect ratio
+    # This is a bit tricky in 3D, so we'll set limits based on data range
+    x_range = jnp.ptp(trajectory[:,:,0])
+    y_range = jnp.ptp(trajectory[:,:,1])
+    z_range = jnp.ptp(trajectory[:,:,2])
+    max_range = jnp.max(jnp.array([x_range, y_range, z_range]))
+    
+    x_mid = jnp.mean(trajectory[:,:,0])
+    y_mid = jnp.mean(trajectory[:,:,1])
+    z_mid = jnp.mean(trajectory[:,:,2])
+    
+    ax.set_xlim(x_mid - max_range/2, x_mid + max_range/2)
+    ax.set_ylim(y_mid - max_range/2, y_mid + max_range/2)
+    ax.set_zlim(z_mid - max_range/2, z_mid + max_range/2)
+    
+    plt.show()
+
+# plot 3d trajectory in polyscope
+def plot_trajectory_3d_polyscope(trajectory, current_frame, title, trajectory_alpha=0.5,simplified=True):
+    # trajectory: (time_steps, landmark_num, 3) - 3D trajectory
+    import polyscope as ps  
+    import polyscope.imgui as psimgui
+    import numpy as np
+    color_range = jnp.linspace(0, 1, trajectory.shape[0])
+    nodes = []
+    edges = []
+    colors = []
+    node_scale = []
+    edge_scale = []
+    for t in range(trajectory.shape[0]):
+        if t == current_frame:
+            break
+        color = plt.cm.coolwarm(color_range[t])
+        for i in range(trajectory.shape[1]):
+            nodes.append(trajectory[t, i])
+            node_scale.append(0.001)
+            if t > 0:
+                edges.append(np.array([t * trajectory.shape[1] + i, (t-1) * trajectory.shape[1] + i]))
+                edge_scale.append(0.02)
+                colors.append(color[:3])
+    nodes = np.array(nodes)
+    edges = np.array(edges)
+    colors = np.array(colors)
+    node_scale = np.array(node_scale)
+    edge_scale = np.array(edge_scale)
+    print(nodes.shape, edges.shape, colors.shape)
+    if len(nodes) > 0 and len(edges) > 0 and len(colors) > 0:
+        ps_curve = ps.register_curve_network("trajectory", nodes, edges)
+        ps_curve.add_color_quantity("color", colors, defined_on="edges", enabled=True)
+        ps_curve.set_radius(0.0012)
+        ps_curve.set_transparency(0.2)
+        # ps_curve.add_scalar_quantity("node_scale", node_scale, enabled=True)
+        # ps_curve.add_scalar_quantity("edge_scale", edge_scale, defined_on="edges")
