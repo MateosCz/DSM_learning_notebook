@@ -25,6 +25,9 @@ import matplotlib.pyplot as plt
 import pandas as pd
 from src.data.BirdBeakData import BirdBeakDataGenerator
 from src.plot import plot_trajectory_3d_polyscope, plot_trajectory_3d
+from flax import linen as nn
+from flax.training import checkpoints
+
 def project_root():
     return os.path.abspath(os.path.join(os.path.dirname(__file__), '../..'))
 
@@ -82,14 +85,44 @@ if __name__ == "__main__":
     sde = Kunita_Flow_SDE_3D_Eulerian(k_alpha=20.0, k_sigma=0.1, grid_num=15, grid_range=(-0.5, 0.5), x0=landmarks[0])
     sde_solver = SDESolver.EulerMaruyama.from_sde(sde, dt=0.01, total_time=1.0, dim=3)
     trainer = Trainer.SsmTrainer(seed=get_random_int(), landmark_num=x0[0].shape[0])
+    
+    retrain = False
+    checkpoint_path = project_root() + "/checkpoints/bird_beak_dsmmodel_checkpoint"
     model = DsmModel(dim=3, score_hidden_dims=(1024, 1024, 256), x_hidden_dims=(1024, 1024, 128), t_hidden_dims=(1024, 1024, 128), with_x0=True, t_embedding_dim=32)
-    train_state = trainer.train_state_init(model, lr=1e-4, model_kwargs={'x': jax.random.normal(jrandom.PRNGKey(get_random_int()), x0[0].shape), 't': jnp.array([0]), 'x0': x0[0], 'object_fn': 'Heng'})
-    train_state, train_loss = trainer.train(train_state, sde, sde_solver, data_generator, 4000, 8)
-    plt.plot(train_loss)
-    plt.show()
+
+    if os.path.exists(checkpoint_path):
+        restored_checkpoint = checkpoints.restore_checkpoint(checkpoint_path, target=None)
+        params = restored_checkpoint["model"]["params"]
+        train_state = trainer.train_state_init(model, lr=1e-4, model_kwargs={'x': jax.random.normal(jrandom.PRNGKey(get_random_int()), x0[0].shape), 't': jnp.array([0]), 'x0': x0[0], 'object_fn': 'Heng'})
+        if retrain:
+            train_state, train_loss = trainer.train(train_state, sde, sde_solver, data_generator, 1000, 8)
+            plt.plot(train_loss)
+            plt.show()
+            checkpoint_path = project_root() + "/checkpoints/bird_beak_neuralOp_checkpoint_retrained"
+            config = {"dimension": x0[0].shape}
+            ckpt = {"model": train_state, "config": config}
+            checkpoints.save_checkpoint(checkpoint_path, ckpt, step=3000, overwrite=True, keep=1)
+
+
+    else:
+        train_state = trainer.train_state_init(model, lr=1e-4, model_kwargs={'x': jax.random.normal(jrandom.PRNGKey(get_random_int()), x0[0].shape), 't': jnp.array([0]), 'x0': x0[0], 'object_fn': 'Heng'})
+        train_state, train_loss = trainer.train(train_state, sde, sde_solver, data_generator, 4000, 8)
+        config = {"dimension": x0[0].shape}
+        ckpt = {"model": train_state, "config": config}
+        
+        checkpoints.save_checkpoint(checkpoint_path, ckpt, step=4000, overwrite=True, keep=1)
+        plt.plot(train_loss)
+        plt.show()
+        params = train_state.params
+    
+    
+    # train_state = trainer.train_state_init(model, lr=1e-4, model_kwargs={'x': jax.random.normal(jrandom.PRNGKey(get_random_int()), x0[0].shape), 't': jnp.array([0]), 'x0': x0[0], 'object_fn': 'Heng'})
+    # train_state, train_loss = trainer.train(train_state, sde, sde_solver, data_generator, 4000, 8)
+    # plt.plot(train_loss)
+    # plt.show()
 
     xT = landmarks[XT_idx]
-    score_fn = lambda x, t, x0: train_state.apply_fn(train_state.params, x, t, x0)
+    score_fn = lambda x, t, x0: train_state.apply_fn(params, x, t, x0)
     reverse_sde = Time_Reversed_SDE(sde, score_fn, 1.0, 0.01)
     reverse_solver = SDESolver.EulerMaruyama.from_sde(reverse_sde, dt=0.01, total_time=1.0, dim=3, condition_x=x0[0])
     condition_xs,_ = reverse_solver.solve(xT, rng_key=jrandom.PRNGKey(get_random_int()))

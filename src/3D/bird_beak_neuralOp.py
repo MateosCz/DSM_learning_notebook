@@ -88,10 +88,10 @@ if __name__ == "__main__":
     sde = Kunita_Flow_SDE_3D_Eulerian_Optimized(k_alpha=8.0, k_sigma=0.2, grid_num=15, grid_range=(-0.5, 0.5), x0=x0[0], batch_size=256)
     sde_solver = SDESolver.EulerMaruyama.from_sde(sde, dt=0.01, total_time=1.0, dim=3)
     trainer = Trainer.SsmTrainer(seed=get_random_int(), landmark_num=x0[0].shape[0])
-    model = CTUNO1D(out_co_dim=3, lifting_dim=32, co_dims_fmults=(1, 2, 4, 8), n_modes_per_layer=(48, 32, 16, 8), norm="instance", act="gelu")
+    model = CTUNO2D(out_co_dim=3, lifting_dim=32, co_dims_fmults=(1, 2, 4, 8), n_modes_per_layer=(48, 32, 16, 8), norm="instance", act="gelu")
     checkpoint_path = project_root() + "/checkpoints/bird_beak_neuralOp_checkpoint_retrained"
     trainer = Trainer.NeuralOpTrainer(seed=get_random_int(), landmark_num=x0[0].shape[0])
-    retrain = True
+    retrain = False
     if os.path.exists(checkpoint_path):
         restored_checkpoint = checkpoints.restore_checkpoint(checkpoint_path, target=None)
         params = restored_checkpoint["model"]["params"]

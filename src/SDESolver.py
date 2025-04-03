@@ -6,6 +6,7 @@ from jaxtyping import Array, PyTree
 from abc import ABC, abstractmethod
 from typing import Tuple, Optional
 from src.SDE import SDE
+from functools import partial
 # class SDESolver(ABC):
 #     @abstractmethod
 #     def __call__(self):
@@ -114,7 +115,7 @@ class EulerMaruyama:
             # dW = dW.reshape(self.noise_size, self.dim)
             # dW = jrandom.multivariate_normal(subkey, jnp.zeros(self.dim), jnp.eye(self.dim)) * jnp.sqrt(self.dt)
             # dW = jrandom.multivariate_normal(subkey[0], jnp.zeros(self.dim), jnp.eye(self.dim)) * jnp.sqrt(self.dt)
-        
+            # check the dimension of x, if x is 2D manifold, then we need to reshape x to 3D
             if self.condition_x is not None:
                 drift = self.drift_fn(x,t, self.condition_x)    
             else:
@@ -122,8 +123,10 @@ class EulerMaruyama:
             diffusion = self.diffusion_fn(x, t)
             print(diffusion.shape)
             print(dW.shape)
-            
-            x_next = x + drift * self.dt + jnp.einsum('ij,jk->ik', diffusion, dW)
+            if x.ndim == 3:
+                x_next = x + drift * self.dt + jnp.einsum('ijk,kl->ijl', diffusion, dW)
+            elif x.ndim == 2:
+                x_next = x + drift * self.dt + jnp.einsum('ij,jk->ik', diffusion, dW)
             if self.debug_mode:
                 jax.debug.print("t: {t}", t=t)
                 jax.debug.print("dt: {dt}", dt=self.dt)

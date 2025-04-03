@@ -48,19 +48,33 @@ def ssm_dsm_loss(params, state, xs, times, x0, Sigmas, drifts, object_fn='Heng',
     return loss
         
 def single_step_loss(params, state, x_prev, x, t, x0, Sigma, Sigma_prev, drift_prev, dt, object_fn='Heng', with_x0=True):
-    
+    print("x.shape", x.shape)
+    print("x_prev.shape", x_prev.shape)
+    print("drift_prev.shape", drift_prev.shape)
+    print("dt.shape", dt.shape)
         
     if object_fn == 'Heng':
         if with_x0:
             pred_score = state.apply_fn(params, x, t, x0)
         else:
             pred_score = state.apply_fn(params, x, t)
+
+        # check the x's shape, if it is a 2D manifold data, then we need to flatten it
+        if x.ndim == 3:
+            x = jnp.reshape(x, (x.shape[0] * x.shape[1], x.shape[2]))
+            x_prev = jnp.reshape(x_prev, (x_prev.shape[0] * x_prev.shape[1], x_prev.shape[2]))
+            pred_score = jnp.reshape(pred_score, (pred_score.shape[0] * pred_score.shape[1], pred_score.shape[2]))
+            drift_prev = jnp.reshape(drift_prev, (drift_prev.shape[0] * drift_prev.shape[1], drift_prev.shape[2]))
+            Sigma_prev = jnp.reshape(Sigma_prev, (Sigma_prev.shape[0] * Sigma_prev.shape[1], Sigma_prev.shape[2] * Sigma_prev.shape[3]))
+            Sigma = jnp.reshape(Sigma, (Sigma.shape[0] * Sigma.shape[1], Sigma.shape[2] * Sigma.shape[3]))
         # Add regularization as in notebook
-        Sigma_prev = Sigma_prev + 1e-3 * jnp.eye(Sigma_prev.shape[0])
+        Sigma_prev = Sigma_prev + 1e-4 * jnp.eye(Sigma_prev.shape[0])
         Sigma_prev_inv = jnp.linalg.solve(Sigma_prev, jnp.eye(Sigma_prev.shape[0]))
         # Sigma_prev_inv = jnp.linalg.pinv(Sigma_prev)
         g_approx = -jnp.matmul(Sigma_prev_inv, (x - x_prev - dt * drift_prev))/dt
+        
         diff = pred_score - g_approx
+        # check the x's shape
         loss = jnp.linalg.norm(jnp.matmul(diff.T, jnp.matmul(Sigma * dt, diff))) ** 2
     elif object_fn == 'Novel':
         # Novel version from notebook

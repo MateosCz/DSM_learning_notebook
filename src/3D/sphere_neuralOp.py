@@ -54,67 +54,84 @@ def project_root():
 
 if __name__ == "__main__":
     # xs, x0 = sphere_test()
-    train_steps = 3000
+    train_steps = 1000
     retrain = False
-    retrain_steps = 1000
+    retrain_steps = 500
+    draw_unconditional = False
+    in_grid_sz = (32,32)
+    # sphere_data_generator_XT = SphereDataGenerator(landmark_num=in_grid_sz[0] * in_grid_sz[1], radius=0.7, center=jnp.array([0.0, 0.0, 0.0]), seed=0)
+    sphere_data_generator_XT = ManifoldDataGenerator2D(grid_size=32, manifold_type="sphere", radius=0.7, flatten=True, seed = get_random_int())
 
-    # sphere_data_generator_XT = SphereDataGenerator(landmark_num=500, radius=0.7, center=jnp.array([0.0, 0.0, 0.0]), seed=0)
-    sphere_data_generator_XT = ManifoldDataGenerator2D(grid_size=10, manifold_type="sphere", seed = get_random_int())
-
-    xT = sphere_data_generator_XT.generate_data(10, 1)
+    xT = sphere_data_generator_XT.generate_data(in_grid_sz[0], 1)
     print(xT.shape)
-    # sphere_data_generator_X0 = SphereDataGenerator(landmark_num=500, radius=0.5, center=jnp.array([0.0, 0.0, 0.0]), seed=0)
-    sphere_data_generator_X0 = ManifoldDataGenerator2D(grid_size=10, manifold_type="sphere", seed = get_random_int())
-    x0 = sphere_data_generator_X0.generate_data(10, 5)
+    # sphere_data_generator_X0 = SphereDataGenerator(landmark_num=in_grid_sz[0] * in_grid_sz[1], radius=0.5, center=jnp.array([0.0, 0.0, 0.0]), seed=0)
+    sphere_data_generator_X0 = ManifoldDataGenerator2D(grid_size=32, manifold_type="sphere", radius=0.5, flatten=True, seed = get_random_int())
+    x0 = sphere_data_generator_X0.generate_data(in_grid_sz[0], 5)
     print(x0.shape)
+    
     sde_3d = Kunita_Flow_SDE_3D_Eulerian_Optimized(k_alpha=1.6, k_sigma=0.4, grid_num=10, grid_range=[-1,1], x0=x0, batch_size=128)
-    sde_solver = EulerMaruyama.from_sde(sde_3d, 0.01, 1.0, 3, None,debug_mode=False)
-    # xs,_ = sde_solver.solve(x0[0], rng_key=jrandom.PRNGKey(get_random_int()))
+    # sde_3d = Kunita_Flow_SDE_3D_Eulerian_2Dmanifold(k_alpha=1.6, k_sigma=0.4, grid_num=10, grid_range=[-1,1], x0=x0)
+    sde_solver = EulerMaruyama.from_sde(sde_3d, 0.02, 1.0, 3, None,debug_mode=False)
+    xs,_ = sde_solver.solve(x0[0], rng_key=jrandom.PRNGKey(get_random_int()))
 
     
-
+    if not draw_unconditional:
     # dsm model
     # model = DsmModel(dim=3, score_hidden_dims=(256, 512, 256), x_hidden_dims=(512, 512, 256), t_hidden_dims=(512, 512, 256), with_x0=True, t_embedding_dim=50)
     # trainer = Trainer.SsmTrainer(seed=get_random_int(), landmark_num=128)
     
-    model = CTUNO2D(out_co_dim=3, lifting_dim=32, co_dims_fmults=(1, 2, 4, 8), n_modes_per_layer=(48, 32, 16, 8), norm="instance", act="gelu")
-    trainer = Trainer.NeuralOpTrainer(seed=get_random_int(), landmark_num=10)
+        model = CTUNO2D(out_co_dim=3, lifting_dim=32, co_dims_fmults=(1, 2, 4), n_modes_per_layer=((16,16),(8,8),(4,4)), norm="instance", act="gelu")
+        trainer = Trainer.NeuralOpTrainer(seed=get_random_int(), landmark_num=in_grid_sz[0])
 
-    checkpoint_path = project_root() + '/checkpoints/sphere_model_neuralOp_2D'
-    retrain_checkpoint_path = project_root() + '/checkpoints/sphere_model_retrain_neuralOp_2D'
-    if not os.path.exists(checkpoint_path):
-        train_state = trainer.train_state_init(model, lr=1e-3, model_kwargs={'x': jax.random.normal(jrandom.PRNGKey(get_random_int()), x0[0].shape), 't': jnp.array([0]), 'x0': x0[0], 'object_fn': 'Heng'})
-        train_state, train_loss = trainer.train(train_state, sde_3d, sde_solver, sphere_data_generator_X0, train_steps, 16)
-        plt.plot(train_loss)
-        plt.show()
-        # save the model
-        config = {"dimension": x0[0].shape}
-        ckpt = {"model": train_state, "config": config}
-        checkpoints.save_checkpoint(checkpoint_path, ckpt, step=train_steps, overwrite=True, keep=1)
-    else:
-        restored_checkpoint = checkpoints.restore_checkpoint(checkpoint_path, target=None)
-        params = restored_checkpoint["model"]["params"]
-        train_state = trainer.train_state_init(model, lr=1e-3, model_kwargs={'x': jax.random.normal(jrandom.PRNGKey(get_random_int()), x0[0].shape), 't': jnp.array([0]), 'x0': x0[0], 'object_fn': 'Heng'}, retrain=True, ckpt_params=params)
-        if retrain:
-            train_state, train_loss = trainer.train(train_state, sde_3d, sde_solver, sphere_data_generator_X0, retrain_steps, 16)
+        checkpoint_path = project_root() + '/checkpoints/sphere_model_neuralOp_2D'
+        retrain_checkpoint_path = project_root() + '/checkpoints/sphere_model_retrain_neuralOp_2D'
+    
+        if not os.path.exists(checkpoint_path):
+            train_state = trainer.train_state_init(model, lr=1e-4, model_kwargs={'x': jax.random.normal(jrandom.PRNGKey(get_random_int()), x0[0].shape), 't': jnp.array([0]),'object_fn': 'Heng'})
+            train_state, train_loss = trainer.train(train_state, sde_3d, sde_solver, sphere_data_generator_X0, train_steps, 16)
             plt.plot(train_loss)
             plt.show()
             # save the model
             config = {"dimension": x0[0].shape}
             ckpt = {"model": train_state, "config": config}
-            checkpoints.save_checkpoint(retrain_checkpoint_path, ckpt, step=retrain_steps, overwrite=True, keep=1)
-    score_fn = lambda x, t, x0: train_state.apply_fn(train_state.params, x, t)
-
-    reverse_sde = Time_Reversed_SDE(sde_3d, score_fn, 1.0,0.01)
-    reverse_solver = EulerMaruyama.from_sde(reverse_sde, 0.01, 1.0, 3, condition_x=x0[0],debug_mode=False)
-    condition_xs,_ = reverse_solver.solve(xT[0], rng_key=jrandom.PRNGKey(get_random_int()))
-    # condition_xs = xs
-    condition_xs = np.array(condition_xs)
-    plot_trajectory_3d(condition_xs, "reverse_trajectory_finite" + "k_alpha=1.6" + "k_sigma=0.4" + "grid_num=10" + "grid_range=[-1,1]", simplified=False, perspective='x')
-    plot_trajectory_3d(condition_xs, "reverse_trajectory_finite" + "k_alpha=1.6" + "k_sigma=0.4" + "grid_num=10" + "grid_range=[-1,1]", simplified=False, perspective='z')
-    plot_trajectory_3d(condition_xs, "reverse_trajectory_finite" + "k_alpha=1.6" + "k_sigma=0.4" + "grid_num=10" + "grid_range=[-1,1]", simplified=False, perspective='y')
-
+            checkpoints.save_checkpoint(checkpoint_path, ckpt, step=train_steps, overwrite=True, keep=1)
+        else:
+            restored_checkpoint = checkpoints.restore_checkpoint(checkpoint_path, target=None)
+            params = restored_checkpoint["model"]["params"]
+            train_state = trainer.train_state_init(model, lr=1e-3, model_kwargs={'x': jax.random.normal(jrandom.PRNGKey(get_random_int()), x0[0].shape), 't': jnp.array([0]),'object_fn': 'Heng'}, retrain=True, ckpt_params=params)
+            if retrain:
+                train_state, train_loss = trainer.train(train_state, sde_3d, sde_solver, sphere_data_generator_X0, retrain_steps, 16)
+                plt.plot(train_loss)
+                plt.show()
+                # save the model
+                config = {"dimension": x0[0].shape}
+                ckpt = {"model": train_state, "config": config}
+                checkpoints.save_checkpoint(retrain_checkpoint_path, ckpt, step=retrain_steps, overwrite=True, keep=1)
+        score_fn = lambda x, t, x0: train_state.apply_fn(train_state.params, x, t)
+        x0 = sphere_data_generator_X0.generate_data(64, 5)
+        xT = sphere_data_generator_XT.generate_data(64, 1)   
+        reverse_sde = Time_Reversed_SDE_2Dmanifold(sde_3d, score_fn, 1.0,0.02)
+        reverse_solver = EulerMaruyama.from_sde(reverse_sde, 0.02, 1.0, 3, condition_x=x0[0],debug_mode=False)
+        condition_xs,_ = reverse_solver.solve(xT[0], rng_key=jrandom.PRNGKey(get_random_int()))
+        # condition_xs = xs
+        condition_xs = np.array(condition_xs)
+        condition_xs = np.reshape(condition_xs, (condition_xs.shape[0], condition_xs.shape[1] * condition_xs.shape[2], condition_xs.shape[3]))
+        trajectory_xs = condition_xs
+    else:
+        xs = np.array(xs)
+        # xs = np.reshape(xs, (xs.shape[0], xs.shape[1] * xs.shape[2], xs.shape[3]))
+        trajectory_xs = xs
+    x0 = np.array(x0)
+    # x0 = np.reshape(x0, (x0.shape[0], x0.shape[1]* x0.shape[2], x0.shape[3]))
+    xT = np.array(xT)
+    # xT = np.reshape(xT, (xT.shape[0], xT.shape[1]* xT.shape[2], xT.shape[3]))
     
+
+    # plot_trajectory_3d(condition_xs, "reverse_trajectory_finite" + "k_alpha=1.6" + "k_sigma=0.4" + "grid_num=10" + "grid_range=[-1,1]", simplified=False, perspective='x')
+    # plot_trajectory_3d(condition_xs, "reverse_trajectory_finite" + "k_alpha=1.6" + "k_sigma=0.4" + "grid_num=10" + "grid_range=[-1,1]", simplified=False, perspective='z')
+    # plot_trajectory_3d(condition_xs, "reverse_trajectory_finite" + "k_alpha=1.6" + "k_sigma=0.4" + "grid_num=10" + "grid_range=[-1,1]", simplified=False, perspective='y')
+
+     
 
     # Create a new figure
 
@@ -122,7 +139,7 @@ if __name__ == "__main__":
     # global frame_idx
     time = 0.0
     total_time = 1.0
-    dt = 0.01
+    dt = 0.02
     frame_idx = 0
 
     ps.set_ground_plane_mode("shadow_only") 
@@ -131,7 +148,7 @@ if __name__ == "__main__":
     ps.set_view_projection_mode("orthographic")
     ps.look_at((2., 2., 2.), (0., 0., 0.))
     def active_animation():
-        for x in condition_xs:
+        for x in trajectory_xs[0]:
             ps_cloud = ps.register_point_cloud("my points", x)
 
             # ps_mesh.add_scalar_quantity("scalar", xs[:, 0], enabled=True)
@@ -143,7 +160,7 @@ if __name__ == "__main__":
         global frame_idx
         
         frame_idx = int(time/dt)
-        ps_cloud = ps.register_point_cloud("my points", condition_xs[frame_idx])
+        ps_cloud = ps.register_point_cloud("my points", trajectory_xs[frame_idx])
         axis_length = 2.0
         x_axis = np.array([[0,0,0], [axis_length,0,0]])
         y_axis = np.array([[0,0,0], [0,axis_length,0]])
@@ -168,7 +185,7 @@ if __name__ == "__main__":
             ps.remove_all_structures()
             frame_idx = int(time/dt)
             time = frame_idx*dt
-            ps_cloud = ps.register_point_cloud("my points", condition_xs[frame_idx])
+            ps_cloud = ps.register_point_cloud("my points", trajectory_xs[frame_idx])
             axis_length = 2.0
             x_axis = np.array([[0,0,0], [axis_length,0,0]])
             y_axis = np.array([[0,0,0], [0,axis_length,0]])
@@ -194,7 +211,7 @@ if __name__ == "__main__":
             ps.get_curve_network("x-axis").set_color((1,0,0))  # Red for X
             ps.get_curve_network("y-axis").set_color((0,1,0))  # Green for Y
             ps.get_curve_network("z-axis").set_color((0,0,1))  # Blue for Z
-            plot_trajectory_3d_polyscope(condition_xs, frame_idx, "reverse_trajectory", simplified=False)
+            plot_trajectory_3d_polyscope(trajectory_xs, frame_idx, "reverse_trajectory", simplified=False)
 
     ps.set_user_callback(imgui_callback)
     ps.show()

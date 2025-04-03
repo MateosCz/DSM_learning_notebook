@@ -128,10 +128,11 @@ def fibonacci_sphere_points(n_points, radius=1.0, center=jnp.array([0.0, 0.0, 0.
     points = jnp.column_stack([x, y, z]) * radius + center
     return points
 class ManifoldDataGenerator(DataGenerator):
-    def __init__(self, grid_size: int, manifold_type: str = "torus", seed: int = 0):
+    def __init__(self, grid_size: int, manifold_type: str = "torus",flatten: bool = False, seed: int = 0):
         super().__init__()
         self.grid_size = grid_size
         self.manifold_type = manifold_type
+        self.flatten = flatten
         self.key_monitor = KeyMonitor(seed)
 
     @partial(jax.jit, static_argnums=(0, 1, 2))  # Make grid_size and manifold_type static
@@ -145,7 +146,11 @@ class ManifoldDataGenerator(DataGenerator):
         # 创建一个批次数组，每个批次都包含相同的完整流形
         result = jnp.tile(manifold_points[None, :, :], (batch_size, 1, 1))
         
-        return result
+        # reshape the result to (batch_size, grid_size * grid_size, 3)
+        if self.flatten:
+            return result.reshape(batch_size, grid_size * grid_size, 3)
+        else:
+            return result
 
 @partial(jax.jit, static_argnums=(0, 1))
 def parametric_surface(grid_size, manifold_type="torus"):
@@ -251,15 +256,17 @@ def parametric_surface(grid_size, manifold_type="torus"):
     return points
 
 class ManifoldDataGenerator2D(DataGenerator):
-    def __init__(self, grid_size: int, manifold_type: str = "torus", seed: int = 0):
+    def __init__(self, grid_size: int, manifold_type: str = "torus", radius: float = 1.0, flatten: bool = False, seed: int = 0):
         super().__init__()
         self.grid_size = grid_size
         self.manifold_type = manifold_type
+        self.radius = radius
+        self.flatten = flatten
         self.key_monitor = KeyMonitor(seed)
 
     @partial(jax.jit, static_argnums=(0, 1, 2))  # Make grid_size and manifold_type static
     def _generate_data_internal(self, grid_size: int, manifold_type: str):
-        return parametric_surface_2Dmanifold(grid_size, manifold_type)
+        return parametric_surface_2Dmanifold(grid_size, manifold_type, self.radius)
 
     def generate_data(self, grid_size: int, batch_size: int):
         # 生成一个完整的流形点集
@@ -271,10 +278,14 @@ class ManifoldDataGenerator2D(DataGenerator):
         # 创建一个批次数组，每个批次都包含相同的完整流形
         result = jnp.tile(manifold_points[None, :, :, :], (batch_size, 1, 1, 1))
         
-        return result  # 形状为 (batch_size, grid_size, grid_size, 3)
+        # flatten the 1,2 dimensions
+        if self.flatten:
+            return result.reshape(batch_size, grid_size * grid_size, 3)
+        else:
+            return result
 
 @partial(jax.jit, static_argnums=(0, 1))
-def parametric_surface_2Dmanifold(grid_size, manifold_type="torus"):
+def parametric_surface_2Dmanifold(grid_size, manifold_type="torus", radius=1.0):
     """
     Generate points on a 2D manifold embedded in 3D space.
     
@@ -298,9 +309,15 @@ def parametric_surface_2Dmanifold(grid_size, manifold_type="torus"):
     n_points = grid_size * grid_size
     
     # Apply the appropriate parametrization based on manifold type
-    if manifold_type == "torus":
+    if manifold_type == "sphere":
+        # Sphere parameters
+        R = radius  # Radius
+        x = R * jnp.cos(u_flat) * jnp.sin(v_flat)
+        y = R * jnp.sin(u_flat) * jnp.sin(v_flat)
+        z = R * jnp.cos(v_flat)
+    elif manifold_type == "torus":
         # Torus parameters
-        R = 2.0  # Major radius
+        R = radius  # Major radius
         r = 0.5  # Minor radius
         
         # Parametric equations for torus
@@ -310,7 +327,7 @@ def parametric_surface_2Dmanifold(grid_size, manifold_type="torus"):
         
     elif manifold_type == "cylinder":
         # Cylinder parameters
-        R = 1.0  # Radius
+        R = radius  # Radius
         height = 2.0
         
         # Parametric equations for cylinder
@@ -320,7 +337,7 @@ def parametric_surface_2Dmanifold(grid_size, manifold_type="torus"):
         
     elif manifold_type == "mobius":
         # Möbius strip parameters
-        R = 2.0  # Major radius
+        R = radius  # Major radius
         width = 0.5  # Width of the strip
         
         # Parametric equations for Möbius strip
@@ -333,7 +350,7 @@ def parametric_surface_2Dmanifold(grid_size, manifold_type="torus"):
     
     elif manifold_type == "klein_bottle":
         # Klein bottle parameters
-        R = 2.0
+        R = radius
         
         # Parametric equations for Klein bottle (one immersion in 3D)
         # Remap parameters for easier equations
