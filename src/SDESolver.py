@@ -121,8 +121,6 @@ class EulerMaruyama:
             else:
                 drift = self.drift_fn(x, t)
             diffusion = self.diffusion_fn(x, t)
-            print(diffusion.shape)
-            print(dW.shape)
             if x.ndim == 3:
                 x_next = x + drift * self.dt + jnp.einsum('ijk,kl->ijl', diffusion, dW)
             elif x.ndim == 2:
@@ -148,6 +146,7 @@ class EulerMaruyama:
 
 
         times = jnp.linspace(0, self.total_time, self.num_steps + 1)
+        # times = jnp.linspace(0, self.total_time, self.num_steps)
         _, (trajectory, diffusion_history) = jax.lax.scan(step, (x0, rng_key), times[:-1])
         return jnp.concatenate([x0[None, ...], trajectory], axis=0), diffusion_history
     
@@ -156,3 +155,4 @@ class EulerMaruyama:
     @staticmethod
     def from_sde(sde, dt: float, total_time: float, dim: int, condition_x: Optional[jnp.ndarray] = None, debug_mode: bool = False) -> 'EulerMaruyama':
         return EulerMaruyama(sde.drift_fn, sde.diffusion_fn, dt, total_time, sde.noise_size, dim,  condition_x, debug_mode)
+

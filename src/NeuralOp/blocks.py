@@ -3,12 +3,15 @@ import jax
 import jax.numpy as jnp
 from flax import linen as nn
 from typing import Optional, Callable, List
+
+import s2fft.transforms
 from src.math.geometry import batch_radius_neighbors, find_nearest_neighbors_in_ball
 from dataclasses import field
 import numpy as np
 from dataclasses import field
 from typing import Optional, List, Tuple, Union, Any
 from src.math.sparse import segment_csr, CSRMatrix
+import s2fft
 def get_activation_fn(activation_str):
     if activation_str.lower() == 'relu':
         return nn.relu
@@ -165,6 +168,63 @@ class SpectralConv2D(nn.Module):
 
         out = jnp.fft.irfft2(out_ft, s=(out_grid_sz, out_grid_sz), axes=(0, 1), norm=self.fft_norm)
         return out
+    
+class SphericalSpectralConv2D(nn.Module):
+    """ Spherical spectral convolution operator, input with shape (in_grid_sz(in_nlat), in_grid_sz(in_nlon), in_channels), 
+    where the in_grid_sz is the number of points on the sphere in each dimension phi and theta, in channels is the number of channels of the input 
+
+
+    output with shape (out_grid_sz(out_nlat), out_grid_sz(out_nlon), out_channels), where the out_grid_sz is the number of points on the sphere in each dimension phi 
+    and theta, out_channels is the number of channels of the output
+
+    parameters:
+
+    in_channels: int, number of channels of the input spherical signal
+    out_channels: int, number of channels of the output spherical signal
+    max_l: int, maximum degree of the spherical harmonics
+    use_spectral_norm: bool, whether to use spectral normalization, default is False
+    """
+    
+    in_channels: int
+    out_channels: int
+    max_l: int
+    use_spectral_norm: bool = False
+
+    @nn.compact
+    def __call__(self, x: jnp.ndarray) -> jnp.ndarray:
+        """ x shape: (in_grid_sz, in_grid_sz, in_channels)
+            output shape: (out_grid_sz, out_grid_sz, out_channels)
+        """
+        in_nlat = x.shape[0]
+        in_nlon = x.shape[1]
+        in_channels = x.shape[2]
+        # check the max_l is no more than the in_grid_sz//2 + 1
+        max_l = jnp.min([self.max_l, in_nlat//2 + 1])
+        # get the spherical harmonic transform for each channel of the input
+        x_sht = jax.vmap(s2fft.forward, in_axes=(2, None, None))(x, max_l, method="jax") # x_sht shape: (max_l, 2 * max_l -1, in_channels)
+        # define the weights for the spectral convolution, each l share the same weights
+        # weights shape: (max_l, in_channels, out_channels)
+        weights_shape = (self.max_l, 2 * self.max_l -1, in_channels, self.out_channels)
+        weights_real = self.param(
+            'weights_real',
+            nn.initializers.normal(stddev=1/(in_channels + self.out_channels)),
+            weights_shape
+        )
+        weights_imag = self.param(
+            'weights_imag',
+            nn.initializers.normal(stddev=1/(in_channels + self.out_channels)),
+            weights_shape
+        )
+        weights = weights_real + 1j*weights_imag
+
+        # perform the spectral convolution      
+        x_sht_conv = jnp.einsum("lmi,lio->lmo", x_sht, weights) 
+        # einsum: lmi,lio->lmo, where l is the degree, m is the order, i is the input channel, o is the output channel
+        # x_sht_conv shape: (max_l, 2 * max_l -1, out_channels)
+        # perform the inverse spherical harmonic transform
+        x_sht_conv_inv = jax.vmap(s2fft.inverse, in_axes=(2, None, None))(x_sht_conv, self.max_l, method="jax")
+        return x_sht_conv_inv
+        
 
 class SpectralFreqTimeConv1D(nn.Module):
     """ Time modulated integral kernel operator """
@@ -228,6 +288,143 @@ class SpectralFreqTimeConv1D(nn.Module):
 
         out = jnp.fft.irfft(out_ft, axis=0, n=out_grid_sz, norm=self.fft_norm)
         return out
+    
+class SphericalSpectralTimeConv1D(nn.Module):
+    """ Time modulated spherical spectral convolution operator, 
+    input x with shape (in_grid_sz(in_nlat), in_grid_sz(in_nlon), in_channels), 
+    where the in_grid_sz is the number of points on the sphere in each dimension phi and theta, in channels is the number of channels of the input 
+    input t_emb with shape (t_emb_dim)
+
+    output with shape (out_grid_sz(out_nlat), out_grid_sz(out_nlon), out_channels), where the out_grid_sz is the number of points on the sphere in each dimension phi 
+    and theta, out_channels is the number of channels of the output
+
+    parameters:
+
+    in_channels: int, number of channels of the input spherical signal
+    out_channels: int, number of channels of the output spherical signal
+    max_l: int, maximum degree of the spherical harmonics
+    use_spectral_norm: bool, whether to use spectral normalization, default is False
+    """
+    in_channels: int
+    out_channels: int
+    t_emb_dim: int
+    max_l: int
+    use_spectral_norm: bool = False
+
+    @nn.compact
+    def __call__(self, x: jnp.ndarray, t_emb: jnp.ndarray) -> jnp.ndarray:
+        """ x shape: (in_grid_sz, in_grid_sz, in_channels),
+            t_emb shape: (t_emb_dim)
+
+            output shape: (out_grid_sz, out_grid_sz, out_channels)
+        """
+        in_nlat = x.shape[0]
+        in_nlon = x.shape[1]
+        in_channels = x.shape[2]
+        # check the max_l is no more than the in_grid_sz//2 + 1
+        max_l = jnp.min([self.max_l, in_nlat//2 + 1])
+        weights_shape = (self.max_l, self.in_channels, self.out_channels)
+        weights_real = self.param(
+            'weights(real)',
+            normal_initializer(self.in_channels),
+            weights_shape,
+        )
+        weights_imag = self.param(
+            'weights(imag)',
+            normal_initializer(self.in_channels),
+            weights_shape,
+        )
+        weights = weights_real + 1j*weights_imag
+
+        x_sht = jax.vmap(s2fft.forward, in_axes=(2, None, None))(x, self.max_l, method='jax')
+
+        out_sht = jnp.zeros((self.max_l, 2 * self.max_l -1, self.out_channels), dtype=jnp.complex64)
+
+        t_emb_transf_real = nn.Dense(
+            self.max_l * (2 * self.max_l -1) * self.in_channels,
+            use_bias=False,
+        )(t_emb)
+        t_emb_transf_imag = nn.Dense(
+            self.max_l * (2 * self.max_l -1) * self.in_channels,
+            use_bias=False,
+        )(t_emb)
+        t_emb_transf = t_emb_transf_real + 1j*t_emb_transf_imag
+
+        # Fix: Ensure dimensions match before einsum by taking the minimum size
+        
+        # reshape the time embedding to the shape of the spherical harmonics
+        t_emb_transf = t_emb_transf.reshape(self.max_l, 2 * self.max_l -1, self.in_channels)
+        
+        # Apply modulated weights to frequency components
+        conv_result = jnp.einsum("lmi,lio->lmo", x_sht, weights)
+        
+        result = t_emb_transf + conv_result
+
+        out = jax.vmap(s2fft.inverse, in_axes=(2, None, None))(result, self.max_l, method='jax')
+        return out
+    
+
+class FMSpectralConv2D(nn.Module):
+    """ Frequency modulated integral kernel operator proposed by ``Learning PDE Solution Operator for Continuous Modelling of Time-Series`` """
+    in_co_dim: int
+    out_co_dim: int
+    t_emb_dim: int
+    # n_modes: int
+    n_modes: Tuple[int, int]
+    out_grid_sz: int = None
+    # out_grid_scaling: Optional[float] = 1.0
+    fft_norm: str = "forward"
+    
+    @nn.compact
+    def __call__(self, x: jnp.ndarray, phi_t: jnp.ndarray) -> jnp.ndarray:
+        """ x shape: (in_grid_sz[0], in_grid_sz[1], in_co_dim),
+            phi_t shape: (t_emb_dim)
+
+            output shape: (out_grid_sz[0], out_grid_sz[1], out_co_dim)
+        """
+        in_grid_szs = x.shape[0:2]
+        # out_grid_szs = tuple(int(self.out_grid_scaling * in_grid_sz) for in_grid_sz in in_grid_szs)
+        out_grid_szs = (self.out_grid_sz, self.out_grid_sz)
+        weights_shape = (self.n_modes[0], self.n_modes[1]//2+1, self.in_co_dim, self.out_co_dim)
+        weights_real = self.param(
+            'weights(real)',
+            normal_initializer(self.in_co_dim),
+            weights_shape,
+        )
+        weights_imag = self.param(
+            'weights(imag)',
+            normal_initializer(self.in_co_dim),
+            weights_shape,
+        )
+        weights = weights_real + 1j*weights_imag
+        
+        x_ft = jnp.fft.rfft2(x, axes=(0, 1), norm=self.fft_norm)
+        
+        out_ft = jnp.zeros((in_grid_szs[0], in_grid_szs[1]//2+1, self.out_co_dim), dtype=jnp.complex64)
+        
+        phi_t_ft_real = nn.Dense(
+            int(self.n_modes[0]*(self.n_modes[1]//2+1)),
+            use_bias=False, 
+        )(phi_t)
+        phi_t_ft_imag = nn.Dense(
+            int(self.n_modes[0]*(self.n_modes[1]//2+1)),
+            use_bias=False,
+        )(phi_t)
+        phi_t_ft = phi_t_ft_real + 1j*phi_t_ft_imag
+        # shape (time_emb_dim, n_modes[0]*(n_modes[1]//2+1))
+        
+        weights = weights.reshape(int(self.n_modes[0]*(self.n_modes[1]//2+1)), self.in_co_dim, self.out_co_dim)
+        weights = jnp.einsum("ij,jkl->ikl", phi_t_ft[:, None]*jnp.eye(int(self.n_modes[0]*(self.n_modes[1]//2+1))), weights) # shape(n_modes[0]*(n_modes[1]//2+1), in_co_dim, out_co_dim)
+        weights = weights.reshape(self.n_modes[0], self.n_modes[1]//2+1, self.in_co_dim, self.out_co_dim)
+        
+        x_ft = jnp.einsum("ijk,ijkl->ijl", x_ft[:self.n_modes[0], :self.n_modes[1]//2+1, :], weights)
+        out_ft = out_ft.at[:self.n_modes[0], :self.n_modes[1]//2+1, :].set(x_ft)
+        
+        out = jnp.fft.irfft2(out_ft, axes=(0, 1), s=out_grid_szs, norm=self.fft_norm)
+        
+        return out
+        
+    
 
 # class SpectralFreqTimeConv2D(nn.Module):
 #     """ Time modulated integral kernel operator """
@@ -247,7 +444,7 @@ class SpectralFreqTimeConv1D(nn.Module):
 #         """
 #         in_grid_sz = x.shape[0]
 #         out_grid_sz = in_grid_sz if self.out_grid_sz is None else self.out_grid_sz
-#         weights_shape = (self.n_modes//2+1, self.n_modes//2+1, self.in_co_dim, self.out_co_dim)
+#         weights_shape = (self.n_modes, self.n_modes//2+1, self.in_co_dim, self.out_co_dim)
 #         weights1_real = self.param(
 #             'weights1(real)',
 #             normal_initializer(self.in_co_dim),
@@ -305,130 +502,132 @@ class SpectralFreqTimeConv1D(nn.Module):
 
 #         out = jnp.fft.irfft2(out_ft, s=(out_grid_sz, out_grid_sz), axes=(0, 1), norm=self.fft_norm)
 #         return out
-class SpectralFreqTimeConv2D(nn.Module):
-    """ Time modulated integral kernel operator with symmetry fix 
-    Modified to handle both upper and lower frequency blocks similar to PyTorch implementation
-    """
-    in_co_dim: int
-    out_co_dim: int
-    t_emb_dim: int
-    n_modes: tuple  # Changed to tuple for separate x,y modes
-    out_grid_sz: int = None
-    fft_norm: str = "forward"
+
+
+# class SpectralFreqTimeConv2D(nn.Module):
+#     """ Time modulated integral kernel operator with symmetry fix 
+#     Modified to handle both upper and lower frequency blocks similar to PyTorch implementation
+#     """
+#     in_co_dim: int
+#     out_co_dim: int
+#     t_emb_dim: int
+#     n_modes: tuple  # Changed to tuple for separate x,y modes
+#     out_grid_sz: int = None
+#     fft_norm: str = "forward"
     
-    @nn.compact
-    def __call__(self, x: jnp.ndarray, t_emb: jnp.ndarray) -> jnp.ndarray:
-        """ 
-        x shape: (in_grid_sz, in_grid_sz, in_co_dim),
-        t_emb shape: (t_emb_dim)
-        output shape: (out_grid_sz, out_grid_sz, out_co_dim)
-        """
-        in_grid_sz_h, in_grid_sz_w = x.shape[0], x.shape[1]
-        out_grid_sz_h = in_grid_sz_h if self.out_grid_sz is None else self.out_grid_sz
-        out_grid_sz_w = in_grid_sz_w if self.out_grid_sz is None else self.out_grid_sz
+#     @nn.compact
+#     def __call__(self, x: jnp.ndarray, t_emb: jnp.ndarray) -> jnp.ndarray:
+#         """ 
+#         x shape: (in_grid_sz, in_grid_sz, in_co_dim),
+#         t_emb shape: (t_emb_dim)
+#         output shape: (out_grid_sz, out_grid_sz, out_co_dim)
+#         """
+#         in_grid_sz_h, in_grid_sz_w = x.shape[0], x.shape[1]
+#         out_grid_sz_h = in_grid_sz_h if self.out_grid_sz is None else self.out_grid_sz
+#         out_grid_sz_w = in_grid_sz_w if self.out_grid_sz is None else self.out_grid_sz
         
-        # Get half modes for each dimension
-        half_n_modes = (self.n_modes[0] // 2, self.n_modes[1] // 2)
+#         # Get half modes for each dimension
+#         half_n_modes = (self.n_modes[0] // 2, self.n_modes[1] // 2)
         
-        # 参数初始化（上下块各一个权重矩阵）-------------------------------------------------
-        # Upper block weights
-        weights_upper_real = self.param(
-            'weights_upper_real',
-            nn.initializers.normal(stddev=1/(self.in_co_dim + self.out_co_dim)),
-            (half_n_modes[0], half_n_modes[1], self.in_co_dim, self.out_co_dim)
-        )
-        weights_upper_imag = self.param(
-            'weights_upper_imag',
-            nn.initializers.normal(stddev=1/(self.in_co_dim + self.out_co_dim)),
-            (half_n_modes[0], half_n_modes[1], self.in_co_dim, self.out_co_dim)
-        )
-        weights_upper = weights_upper_real + 1j * weights_upper_imag
+#         # 参数初始化（上下块各一个权重矩阵）-------------------------------------------------
+#         # Upper block weights
+#         weights_upper_real = self.param(
+#             'weights_upper_real',
+#             nn.initializers.normal(stddev=1/(self.in_co_dim + self.out_co_dim)),
+#             (half_n_modes[0], half_n_modes[1], self.in_co_dim, self.out_co_dim)
+#         )
+#         weights_upper_imag = self.param(
+#             'weights_upper_imag',
+#             nn.initializers.normal(stddev=1/(self.in_co_dim + self.out_co_dim)),
+#             (half_n_modes[0], half_n_modes[1], self.in_co_dim, self.out_co_dim)
+#         )
+#         weights_upper = weights_upper_real + 1j * weights_upper_imag
         
-        # Lower block weights
-        weights_lower_real = self.param(
-            'weights_lower_real',
-            nn.initializers.normal(stddev=1/(self.in_co_dim + self.out_co_dim)),
-            (half_n_modes[0], half_n_modes[1], self.in_co_dim, self.out_co_dim)
-        )
-        weights_lower_imag = self.param(
-            'weights_lower_imag',
-            nn.initializers.normal(stddev=1/(self.in_co_dim + self.out_co_dim)),
-            (half_n_modes[0], half_n_modes[1], self.in_co_dim, self.out_co_dim)
-        )
-        weights_lower = weights_lower_real + 1j * weights_lower_imag
+#         # Lower block weights
+#         weights_lower_real = self.param(
+#             'weights_lower_real',
+#             nn.initializers.normal(stddev=1/(self.in_co_dim + self.out_co_dim)),
+#             (half_n_modes[0], half_n_modes[1], self.in_co_dim, self.out_co_dim)
+#         )
+#         weights_lower_imag = self.param(
+#             'weights_lower_imag',
+#             nn.initializers.normal(stddev=1/(self.in_co_dim + self.out_co_dim)),
+#             (half_n_modes[0], half_n_modes[1], self.in_co_dim, self.out_co_dim)
+#         )
+#         weights_lower = weights_lower_real + 1j * weights_lower_imag
         
-        # 时间嵌入调制 ------------------------------------------------------------
-        # 为上下块分别生成调制因子
-        t_projection = nn.Dense(
-            features=4*half_n_modes[0]*half_n_modes[1],  # 上下块的实部和虚部
-            use_bias=False
-        )(t_emb)
+#         # 时间嵌入调制 ------------------------------------------------------------
+#         # 为上下块分别生成调制因子
+#         t_projection = nn.Dense(
+#             features=4*half_n_modes[0]*half_n_modes[1],  # 上下块的实部和虚部
+#             use_bias=False
+#         )(t_emb)
         
-        # 分割为上块和下块的调制因子
-        t_upper = t_projection[:2*half_n_modes[0]*half_n_modes[1]]
-        t_lower = t_projection[2*half_n_modes[0]*half_n_modes[1]:]
+#         # 分割为上块和下块的调制因子
+#         t_upper = t_projection[:2*half_n_modes[0]*half_n_modes[1]]
+#         t_lower = t_projection[2*half_n_modes[0]*half_n_modes[1]:]
         
-        # 上块的实部和虚部
-        t_upper_real = t_upper[::2]
-        t_upper_imag = t_upper[1::2]
+#         # 上块的实部和虚部
+#         t_upper_real = t_upper[::2]
+#         t_upper_imag = t_upper[1::2]
         
-        # 下块的实部和虚部
-        t_lower_real = t_lower[::2]
-        t_lower_imag = t_lower[1::2]
+#         # 下块的实部和虚部
+#         t_lower_real = t_lower[::2]
+#         t_lower_imag = t_lower[1::2]
         
-        # 重塑调制因子形状与权重矩阵匹配
-        modulation_upper = jnp.reshape(
-            t_upper_real + 1j*t_upper_imag, 
-            (half_n_modes[0], half_n_modes[1], 1, 1)
-        )
+#         # 重塑调制因子形状与权重矩阵匹配
+#         modulation_upper = jnp.reshape(
+#             t_upper_real + 1j*t_upper_imag, 
+#             (half_n_modes[0], half_n_modes[1], 1, 1)
+#         )
         
-        modulation_lower = jnp.reshape(
-            t_lower_real + 1j*t_lower_imag,
-            (half_n_modes[0], half_n_modes[1], 1, 1)
-        )
+#         modulation_lower = jnp.reshape(
+#             t_lower_real + 1j*t_lower_imag,
+#             (half_n_modes[0], half_n_modes[1], 1, 1)
+#         )
         
-        # 应用时间调制
-        modulated_weights_upper = weights_upper * modulation_upper
-        modulated_weights_lower = weights_lower * modulation_lower
+#         # 应用时间调制
+#         modulated_weights_upper = weights_upper * modulation_upper
+#         modulated_weights_lower = weights_lower * modulation_lower
         
-        # 傅里叶变换处理 ---------------------------------------------------------
-        x_ft = jnp.fft.rfft2(x, axes=(0, 1), norm=self.fft_norm)
+#         # 傅里叶变换处理 ---------------------------------------------------------
+#         x_ft = jnp.fft.rfft2(x, axes=(0, 1), norm=self.fft_norm)
         
-        # 创建输出频谱
-        out_ft = jnp.zeros(
-            (in_grid_sz_h, in_grid_sz_w//2 + 1, self.out_co_dim),
-            dtype=jnp.complex64
-        )
+#         # 创建输出频谱
+#         out_ft = jnp.zeros(
+#             (in_grid_sz_h, in_grid_sz_w//2 + 1, self.out_co_dim),
+#             dtype=jnp.complex64
+#         )
         
-        # 处理上块（低频部分）
-        x_ft_upper = x_ft[:half_n_modes[0], :half_n_modes[1], :]
-        out_ft_upper = jnp.einsum('ijk,ijkl->ijl', x_ft_upper, modulated_weights_upper)
+#         # 处理上块（低频部分）
+#         x_ft_upper = x_ft[:half_n_modes[0], :half_n_modes[1], :]
+#         out_ft_upper = jnp.einsum('ijk,ijkl->ijl', x_ft_upper, modulated_weights_upper)
         
-        # 处理下块（高频部分）
-        x_ft_lower = x_ft[-half_n_modes[0]:, :half_n_modes[1], :]
-        out_ft_lower = jnp.einsum('ijk,ijkl->ijl', x_ft_lower, modulated_weights_lower)
+#         # 处理下块（高频部分）
+#         x_ft_lower = x_ft[-half_n_modes[0]:, :half_n_modes[1], :]
+#         out_ft_lower = jnp.einsum('ijk,ijkl->ijl', x_ft_lower, modulated_weights_lower)
         
-        # 将结果填入输出频谱
-        out_ft = out_ft.at[:half_n_modes[0], :half_n_modes[1], :].set(out_ft_upper)
-        out_ft = out_ft.at[-half_n_modes[0]:, :half_n_modes[1], :].set(out_ft_lower)
+#         # 将结果填入输出频谱
+#         out_ft = out_ft.at[:half_n_modes[0], :half_n_modes[1], :].set(out_ft_upper)
+#         out_ft = out_ft.at[-half_n_modes[0]:, :half_n_modes[1], :].set(out_ft_lower)
         
-        # 逆变换恢复空间信号 ------------------------------------------------------
-        out = jnp.fft.irfft2(
-            out_ft, 
-            s=(out_grid_sz_h, out_grid_sz_w),
-            axes=(0, 1), 
-            norm=self.fft_norm
-        )
+#         # 逆变换恢复空间信号 ------------------------------------------------------
+#         out = jnp.fft.irfft2(
+#             out_ft, 
+#             s=(out_grid_sz_h, out_grid_sz_w),
+#             axes=(0, 1), 
+#             norm=self.fft_norm
+#         )
         
-        # 可选: 添加偏置项
-        # bias = self.param(
-        #     'bias',
-        #     nn.initializers.zeros,
-        #     (self.out_co_dim,)
-        # )
-        # # out = out + bias
+#         # 可选: 添加偏置项
+#         # bias = self.param(
+#         #     'bias',
+#         #     nn.initializers.zeros,
+#         #     (self.out_co_dim,)
+#         # )
+#         # # out = out + bias
         
-        return out
+#         return out
 # class SpectralFreqTimeConv2D(nn.Module):
 #     """ Time modulated integral kernel operator with symmetry fix """
 #     in_co_dim: int
@@ -588,6 +787,40 @@ class CTUNOBlock1D(nn.Module):
 
         return get_activation_fn(self.act)(x_out)
     
+class SphericalCTUNOBlock1D(nn.Module):
+    in_co_dim: int
+    out_co_dim: int
+    t_emb_dim: int
+    n_modes: int # number of zonal harmonics
+    out_grid_sz: int = None
+    fft_norm: str = "forward"
+    norm: str = "instance"
+    act: str = "relu"
+    
+    @nn.compact
+    def __call__(self, x: jnp.ndarray, t_emb: jnp.ndarray) -> jnp.ndarray:
+        """ x shape: (in_grid_sz, in_co_dim),
+            t_emb shape: (t_emb_dim)
+
+            output shape: (out_grid_sz, out_co_dim)
+        """
+        x_spec_out = SpectralFreqTimeConv1D(
+            self.in_co_dim,
+            self.out_co_dim,
+            self.t_emb_dim,
+            self.n_modes,
+            self.out_grid_sz,
+            self.fft_norm
+        )(x, t_emb)
+        x_res_out = TimeConv1D(
+            self.out_co_dim,
+            self.out_grid_sz,
+        )(x, t_emb)
+        x_out = x_spec_out + x_res_out
+        # if self.norm.lower() == "instance":
+        #     # x_out = nn.LayerNorm()(x_out)
+
+        return get_activation_fn(self.act)(x_out)
 class CTUNOBlock2D(nn.Module):
     in_co_dim: int
     out_co_dim: int
@@ -605,7 +838,43 @@ class CTUNOBlock2D(nn.Module):
 
             output shape: (out_grid_sz, out_grid_sz, out_co_dim)
         """
-        x_spec_out = SpectralFreqTimeConv2D(
+        x_spec_out = FMSpectralConv2D(
+            self.in_co_dim,
+            self.out_co_dim,
+            self.t_emb_dim,
+            (self.n_modes, self.n_modes),
+            self.out_grid_sz,
+            self.fft_norm
+        )(x, t_emb)
+        x_res_out = TimeConv2D(
+            self.out_co_dim,
+            self.out_grid_sz,
+        )(x, t_emb)
+        x_out = x_spec_out + x_res_out
+        if self.norm.lower() == "instance":
+            # x_out = nn.LayerNorm()(x_out)
+            x_out = nn.LayerNorm()(x_out)
+
+        return get_activation_fn(self.act)(x_out)
+    
+class SphericalCTUNOBlock2D(nn.Module):
+    in_co_dim: int
+    out_co_dim: int
+    t_emb_dim: int
+    n_modes: int
+    out_grid_sz: int = None
+    fft_norm: str = "forward"
+    norm: str = "instance"
+    act: str = "relu"
+    
+    @nn.compact
+    def __call__(self, x: jnp.ndarray, t_emb: jnp.ndarray) -> jnp.ndarray:
+        """ x shape: (in_grid_sz, in_grid_sz, in_co_dim),
+            t_emb shape: (t_emb_dim)
+
+            output shape: (out_grid_sz, out_grid_sz, out_co_dim)
+        """
+        x_spec_out = SphericalSpectralConv2D(
             self.in_co_dim,
             self.out_co_dim,
             self.t_emb_dim,
@@ -619,10 +888,10 @@ class CTUNOBlock2D(nn.Module):
         )(x, t_emb)
         x_out = x_spec_out + x_res_out
         if self.norm.lower() == "instance":
+            # x_out = nn.LayerNorm()(x_out)
             x_out = nn.LayerNorm()(x_out)
 
         return get_activation_fn(self.act)(x_out)
-    
     
 class TimeEmbedding(nn.Module):
     """ Sinusoidal time step embedding """
@@ -897,189 +1166,6 @@ class GNOBlock(nn.Module):
         
 
         return integral_output
-
-
-# class IntegralTransform(nn.Module):
-#     kernel_mlp: Optional[nn.Module] = None
-#     kernel_mlp_layers: list = field(default_factory=list)
-#     kernel_mlp_activation: str = "gelu"
-#     transform_type: str = "linear" 
-
-#     '''
-#     Computes one of the following:
-#         (a) \int_{A(x)} k(x, y) dy
-#         (b) \int_{A(x)} k(x, y) * f(y) dy  # default
-#         (c) \int_{A(x)} k(x, y, f(y)) dy
-#         (d) \int_{A(x)} k(x, y, f(y)) * f(y) dy
-#     '''
-    
-#     @nn.compact
-#     def __call__(self, y: jnp.ndarray, neighbors_mask: jnp.ndarray, x: Optional[jnp.ndarray] = None, 
-#                  f_y: Optional[jnp.ndarray] = None, weights: Optional[jnp.ndarray] = None) -> jnp.ndarray:
-#         '''
-#         极简化版，完全重写为矩阵运算，避免使用动态控制流
-        
-#         Args:
-#             y: 输入点，形状 (n_y, dim_y)
-#             neighbors_mask: 邻居掩码，形状 (n_x, n_y)，其中True表示y[j]是x[i]的邻居
-#             x: 评估点，形状 (n_x, dim_x)，如果为None，则等于y
-#             f_y: 输入函数在y点的值，形状 (n_y, dim_f)
-        
-#         Returns:
-#             结果矩阵，形状 (n_x, out_channels)
-#         '''
-#         # 如果x为None，设置为y
-#         if x is None:
-#             x = y
-        
-#         # 计算输入维度，以确保MLP层数组正确
-#         dim_x = x.shape[1]
-#         dim_y = y.shape[1]
-        
-#         # 根据transform_type计算输入维度
-#         if f_y is not None and (self.transform_type == 'nonlinear' or self.transform_type == 'nonlinear_kernelonly'):
-#             dim_f = f_y.shape[1]
-#             input_dim = dim_x + dim_y + dim_f
-#         else:
-#             input_dim = dim_x + dim_y
-        
-#         # 确保kernel_mlp_layers包含输入维度
-#         mlp_layers = list(self.kernel_mlp_layers)
-#         if not mlp_layers:
-#             # If empty, create a default structure with input_dim and output_dim=1
-#             mlp_layers = [input_dim, input_dim//2, 1]
-#         elif mlp_layers[0] != input_dim:
-#             # If first layer doesn't match input_dim, prepend it
-#             mlp_layers = [input_dim] + mlp_layers
-        
-#         # 初始化MLP - must provide complete layer dimensions including input and output
-#         kernel_mlp = self.kernel_mlp if self.kernel_mlp is not None else LinearChannelMLP(
-#             layers=mlp_layers,
-#             activation=self.kernel_mlp_activation
-#         )
-        
-#         n_x, n_y = neighbors_mask.shape
-#         out_channels = mlp_layers[-1]
-        
-#         # 计算每个点的邻居数量
-#         n_neighbors = jnp.sum(neighbors_mask, axis=1)  # (n_x,)
-        
-#         # 重塑x和y为合适的形状进行广播
-#         x_expanded = x[:, None, :]  # (n_x, 1, dim_x)
-#         y_expanded = y[None, :, :]  # (1, n_y, dim_y)
-        
-#         # 对于每个(x_i, y_j)对，准备输入到核MLP
-#         # 复制x到(n_x, n_y, dim_x)
-#         x_repeated = jnp.broadcast_to(x_expanded, (n_x, n_y, x.shape[1]))
-#         # 复制y到(n_x, n_y, dim_y)
-#         y_repeated = jnp.broadcast_to(y_expanded, (n_x, n_y, y.shape[1]))
-        
-#         # 如果f_y不为None，也将其广播
-#         if f_y is not None:
-#             f_y_expanded = f_y[None, :, :]  # (1, n_y, dim_f)
-#             f_y_repeated = jnp.broadcast_to(f_y_expanded, (n_x, n_y, f_y.shape[1]))
-        
-#         # 构建核函数输入
-#         if f_y is not None and (self.transform_type == 'nonlinear' or self.transform_type == 'nonlinear_kernelonly'):
-#             # 包含函数值
-#             kernel_inputs = jnp.concatenate([
-#                 x_repeated.reshape(n_x * n_y, -1),
-#                 y_repeated.reshape(n_x * n_y, -1),
-#                 f_y_repeated.reshape(n_x * n_y, -1)
-#             ], axis=1)
-#         else:
-#             # 仅包含坐标
-#             kernel_inputs = jnp.concatenate([
-#                 x_repeated.reshape(n_x * n_y, -1),
-#                 y_repeated.reshape(n_x * n_y, -1)
-#             ], axis=1)
-            
-#         # Explicitly check dimensions before calling kernel_mlp
-#         expected_input_dim = kernel_inputs.shape[-1]
-#         if mlp_layers[0] != expected_input_dim:
-#             raise ValueError(f"MLP input dimension mismatch: expected {expected_input_dim}, got {mlp_layers[0]}")
-        
-#         # 应用核MLP
-#         kernel_outputs = kernel_mlp(kernel_inputs)  # (n_x * n_y, out_channels)
-        
-#         # 将输出重塑回(n_x, n_y, out_channels)
-#         kernel_outputs = kernel_outputs.reshape(n_x, n_y, out_channels)
-        
-#         # 应用掩码 - 将非邻居对应的输出设为0
-#         mask_expanded = neighbors_mask[:, :, None]  # (n_x, n_y, 1)
-#         masked_outputs = kernel_outputs * mask_expanded  # (n_x, n_y, out_channels)
-        
-#         # 计算积分变换
-#         if self.transform_type == 'linear' or self.transform_type == 'nonlinear':
-#             if f_y is not None:
-#                 # 对于linear变换，还需要乘以f_y
-#                 masked_outputs = masked_outputs * f_y_repeated
-            
-#             # 对邻居求和
-#             result = jnp.sum(masked_outputs, axis=1)  # (n_x, out_channels)
-            
-#             # 归一化
-#             n_neighbors_safe = jnp.maximum(n_neighbors, jnp.ones_like(n_neighbors))
-#             result = result / n_neighbors_safe[:, None]
-            
-#         elif self.transform_type == 'linear_kernelonly' or self.transform_type == 'nonlinear_kernelonly':
-#             # 仅对邻居求和
-#             result = jnp.sum(masked_outputs, axis=1)  # (n_x, out_channels)
-            
-#             # 归一化
-#             n_x_safe = jnp.maximum(n_x, 1)
-#             result = result / n_x_safe
-            
-#         else:
-#             # 默认行为
-#             result = jnp.sum(masked_outputs, axis=1)  # (n_x, out_channels)
-#             result = result / jnp.maximum(jnp.sum(neighbors_mask), 1)
-        
-#         return result
-
-# class GNOBlock(nn.Module):
-#     in_co_dim: int = 3  # 输入点y和x的通道数，默认为3
-#     in_channels: Optional[int] = None  # 输入函数f_y的通道数
-#     out_channels: int = None  # 输出函数的通道数
-#     radius: float = 0.1  # 邻居搜索半径
-#     kernel_mlp_layers: list = field(default_factory=list)  # 核MLP的层大小
-#     kernel_mlp_activation: str = "gelu"  # 核MLP的激活函数
-#     transform_type: str = "linear_kernelonly"  # 积分变换类型
-
-#     @nn.compact
-#     def __call__(self, y: jnp.ndarray, x: Optional[jnp.ndarray] = None, f_y: Optional[jnp.ndarray] = None) -> jnp.ndarray:
-#         '''
-#         y: 形状 (n_y, in_co_dim) 上一层输出，积分域
-#         x: 形状 (n_x, in_co_dim) 当前层网格点，评估域
-#         f_y: 形状 (n_y, in_channels) 上一层网格点的函数值
-#         '''
-#         if self.out_channels is None:
-#             out_channels = self.in_co_dim
-#         else:
-#             out_channels = self.out_channels
-            
-#         if x is None:
-#             x = y
-            
-#         # 使用find_nearest_neighbors_in_ball查找邻居
-#         # 假设已经导入了函数
-#         neighbors_mask_csr = find_nearest_neighbors_in_ball(x, y, self.radius, sparse=True)
-        
-#         # 计算积分变换
-#         if self.in_channels is None:
-#             transform_type = "linear_kernelonly"
-#         else:
-#             transform_type = self.transform_type
-            
-#         integral_transform = IntegralTransform(
-#             kernel_mlp_layers=self.kernel_mlp_layers, 
-#             kernel_mlp_activation=self.kernel_mlp_activation, 
-#             transform_type=transform_type
-#         )
-        
-#         integral_output = integral_transform(y, neighbors_mask_csr, x, f_y)
-        
-#         return integral_output
 
     
 class GICTUNOBlock(nn.Module):

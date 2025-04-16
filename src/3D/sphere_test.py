@@ -59,24 +59,29 @@ if __name__ == "__main__":
     retrain = True
     retrain_steps = 1000
 
-    sphere_data_generator_XT = SphereDataGenerator(landmark_num=500, radius=0.7, center=jnp.array([0.0, 0.0, 0.0]), seed=0)
-    xT = sphere_data_generator_XT.generate_data(256, 1)
-    print(xT.shape)
-    sphere_data_generator_X0 = SphereDataGenerator(landmark_num=500, radius=0.5, center=jnp.array([0.0, 0.0, 0.0]), seed=0)
-    x0 = sphere_data_generator_X0.generate_data(256, 5)
-    print(x0.shape)
-    sde_3d = Kunita_Flow_SDE_3D_Eulerian_Optimized(k_alpha=1.6, k_sigma=0.4, grid_num=10, grid_range=[-1,1], x0=x0, batch_size=128)
-    sde_solver = EulerMaruyama.from_sde(sde_3d, 0.01, 1.0, 3, None,debug_mode=False)
-    # xs,_ = sde_solver.solve(x0[0], rng_key=jrandom.PRNGKey(get_random_int()))
+    grid_size = 12
 
+    # sphere_data_generator_XT = SphereDataGenerator(landmark_num=500, radius=0.7, center=jnp.array([0.0, 0.0, 0.0]), seed=0)
+    sphere_data_generator_XT = ManifoldDataGenerator2D(grid_size=grid_size, manifold_type="sphere", radius=0.7, flatten=False, seed = get_random_int())
+    xT = sphere_data_generator_XT.generate_data(grid_size, 1)
+    print(xT.shape)
+    # sphere_data_generator_X0 = SphereDataGenerator(landmark_num=500, radius=0.5, center=jnp.array([0.0, 0.0, 0.0]), seed=0)
+    sphere_data_generator_X0 = ManifoldDataGenerator2D(grid_size=grid_size, manifold_type="sphere", radius=0.5, flatten=False, seed = get_random_int())
+    x0 = sphere_data_generator_X0.generate_data(grid_size, 5)
+    print(x0.shape)
+    # sde_3d = Kunita_Flow_SDE_3D_Eulerian_Optimized(k_alpha=1.6, k_sigma=0.4, grid_num=10, grid_range=[-1,1], x0=x0, batch_size=128)
+    # sde_3d = Brownian_Motion_SDE_2Dmanifold(dim=3, sigma=0.1, x0=x0[0])
+    sde_3d = Kunita_Flow_SDE_3D_Eulerian_2Dmanifold(k_alpha=1.6, k_sigma=0.4, grid_num=10, grid_range=[-1,1], x0=x0[0])
+    sde_solver = EulerMaruyama.from_sde(sde_3d, 0.01, 1.0, 3, None,debug_mode=False)
+    xs,_ = sde_solver.solve(x0[0], rng_key=jrandom.PRNGKey(get_random_int()))
+    print(xs.shape)
     
 
     # dsm model
     model = DsmModel(dim=3, score_hidden_dims=(512, 512, 256), x_hidden_dims=(512, 512, 256), t_hidden_dims=(512, 512, 256), with_x0=True, t_embedding_dim=50)
-    trainer = Trainer.SsmTrainer(seed=get_random_int(), landmark_num=256)
+    trainer = Trainer.SsmTrainer(seed=get_random_int(), landmark_num=grid_size)
     
-    # model = CTUNO1D(out_co_dim=3, lifting_dim=32, co_dims_fmults=(1, 2, 4, 8), n_modes_per_layer=(48, 32, 16, 8), norm="instance", act="gelu")
-    # trainer = Trainer.NeuralOpTrainer(seed=get_random_int(), landmark_num=128)
+
     checkpoint_path = project_root() + '/checkpoints/sphere_model' + str(trainer.landmark_num)
     retrain_checkpoint_path = project_root() + '/checkpoints/sphere_model_retrain' + str(trainer.landmark_num)
     if not os.path.exists(checkpoint_path):
@@ -102,7 +107,7 @@ if __name__ == "__main__":
             checkpoints.save_checkpoint(retrain_checkpoint_path, ckpt, step=retrain_steps, overwrite=True, keep=1)
     score_fn = lambda x, t, x0: train_state.apply_fn(train_state.params, x, t, x0)
 
-    reverse_sde = Time_Reversed_SDE(sde_3d, score_fn, 1.0,0.01)
+    reverse_sde = Time_Reversed_SDE_2Dmanifold(sde_3d, score_fn, 1.0,0.01)
     reverse_solver = EulerMaruyama.from_sde(reverse_sde, 0.01, 1.0, 3, condition_x=x0[0],debug_mode=False)
     condition_xs,_ = reverse_solver.solve(xT[0], rng_key=jrandom.PRNGKey(get_random_int()))
     # condition_xs = xs

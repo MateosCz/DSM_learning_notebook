@@ -48,6 +48,16 @@ class DsmModel(nn.Module):
     @nn.compact
     def __call__(self, x, t, x0=None):
         t = get_timestep_embedding(t, self.t_embedding_dim)
+        if x.ndim == 3:
+            n_grid_0 = x.shape[0]
+            n_grid_1 = x.shape[1]
+            x = jnp.reshape(x, (x.shape[0] * x.shape[1], x.shape[2]))
+
+            manifold_2D = True
+        else:
+            manifold_2D = False
+        if x0.ndim == 3:
+            x0 = jnp.reshape(x0, (x0.shape[0] * x0.shape[1], x0.shape[2]))
         for hidden_dim in self.t_hidden_dims:
             t = nn.Dense(features=hidden_dim)(t)
             t = nn.gelu(t)
@@ -62,5 +72,7 @@ class DsmModel(nn.Module):
             x = nn.Dense(features=hidden_dim)(x)
             x = nn.gelu(x)
         x = nn.Dense(features=self.dim)(x)
+        if manifold_2D:
+            x = jnp.reshape(x, (n_grid_0, n_grid_1, self.dim))
         return x
     

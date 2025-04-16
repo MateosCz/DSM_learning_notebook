@@ -56,7 +56,7 @@ class SsmTrainer(Trainer):
             sde=sde,
             dt=solver.dt,
             total_time=solver.total_time,
-            dim=x0.shape[2],
+            dim=x0.shape[-1],
         )
         
         # Solve SDE for each sample with provided keys

@@ -28,24 +28,6 @@ from flax.training import checkpoints
 def get_random_int():
     return random.randint(0, 1000000)
 cwd = os.getcwd()
-# v, f = igl.read_triangle_mesh(cwd + '/data/meshes/bunny.obj')
-# K = igl.cotmatrix(v, f)
-
-# M = igl.massmatrix(v, f, igl.MASSMATRIX_TYPE_VORONOI)
-
-# m_inv = 1.0 / M.diagonal()
-# M_inv = diags(m_inv, format="csr")
-
-# L = -M_inv @ K
-def sphere_test():
-    sphere_data_generator = SphereDataGenerator(landmark_num=500, radius=1.0, center=jnp.array([0.0, 0.0, 0.0]), seed=0)
-
-    x0 = sphere_data_generator.generate_data(500, 1)
-    x0 = x0[0]
-    sde_3d = Kunita_Flow_SDE_3D_Eulerian(k_alpha=1.0, k_sigma=0.4, grid_num=25, grid_range=[-1,1], x0=x0)
-    sde_solver = EulerMaruyama.from_sde(sde_3d, 0.01, 1.0, 3, None,debug_mode=False)
-    xs,_ = sde_solver.solve(x0, rng_key=jrandom.PRNGKey(get_random_int()))
-    return xs, x0
 
 def project_root():
     return os.path.abspath(os.path.join(os.path.dirname(__file__), '../..'))
@@ -54,23 +36,21 @@ def project_root():
 
 if __name__ == "__main__":
     # xs, x0 = sphere_test()
-    train_steps = 1000
+    train_steps = 5000
     retrain = False
     retrain_steps = 500
     draw_unconditional = False
-    in_grid_sz = (32,32)
-    # sphere_data_generator_XT = SphereDataGenerator(landmark_num=in_grid_sz[0] * in_grid_sz[1], radius=0.7, center=jnp.array([0.0, 0.0, 0.0]), seed=0)
-    sphere_data_generator_XT = ManifoldDataGenerator2D(grid_size=32, manifold_type="sphere", radius=0.7, flatten=True, seed = get_random_int())
+    in_grid_sz = (16,16)
+    sphere_data_generator_XT = ManifoldDataGenerator2D(grid_size=16, manifold_type="sphere", radius=0.7, flatten=True, seed = get_random_int())
 
     xT = sphere_data_generator_XT.generate_data(in_grid_sz[0], 1)
     print(xT.shape)
-    # sphere_data_generator_X0 = SphereDataGenerator(landmark_num=in_grid_sz[0] * in_grid_sz[1], radius=0.5, center=jnp.array([0.0, 0.0, 0.0]), seed=0)
-    sphere_data_generator_X0 = ManifoldDataGenerator2D(grid_size=32, manifold_type="sphere", radius=0.5, flatten=True, seed = get_random_int())
+    sphere_data_generator_X0 = ManifoldDataGenerator2D(grid_size=16, manifold_type="sphere", radius=0.5, flatten=True, seed = get_random_int())
     x0 = sphere_data_generator_X0.generate_data(in_grid_sz[0], 5)
     print(x0.shape)
-    
-    sde_3d = Kunita_Flow_SDE_3D_Eulerian_Optimized(k_alpha=1.6, k_sigma=0.4, grid_num=10, grid_range=[-1,1], x0=x0, batch_size=128)
+    sde_3d = Kunita_Flow_SDE_3D_Eulerian(k_alpha=1.6, k_sigma=0.4, grid_num=10, grid_range=[-1,1], x0=x0)
     # sde_3d = Kunita_Flow_SDE_3D_Eulerian_2Dmanifold(k_alpha=1.6, k_sigma=0.4, grid_num=10, grid_range=[-1,1], x0=x0)
+    # sde_3d = Brownian_Motion_SDE(dim=3, sigma=0.05, x0=x0[0])
     sde_solver = EulerMaruyama.from_sde(sde_3d, 0.02, 1.0, 3, None,debug_mode=False)
     xs,_ = sde_solver.solve(x0[0], rng_key=jrandom.PRNGKey(get_random_int()))
 
@@ -80,7 +60,9 @@ if __name__ == "__main__":
     # model = DsmModel(dim=3, score_hidden_dims=(256, 512, 256), x_hidden_dims=(512, 512, 256), t_hidden_dims=(512, 512, 256), with_x0=True, t_embedding_dim=50)
     # trainer = Trainer.SsmTrainer(seed=get_random_int(), landmark_num=128)
     
-        model = CTUNO2D(out_co_dim=3, lifting_dim=32, co_dims_fmults=(1, 2, 4), n_modes_per_layer=((16,16),(8,8),(4,4)), norm="instance", act="gelu")
+        # model = CTUNO2D(out_co_dim=3, lifting_dim=16, co_dims_fmults=(1, 2, 4), n_modes_per_layer=((16,16),(8,8),(4,4)), norm="instance", act="gelu")
+        model = CTUNO1D(out_co_dim=3, lifting_dim=16, co_dims_fmults=(1, 2, 4), n_modes_per_layer=(16,8,4), norm="instance", act="gelu")
+        # model = CTUNO2D(out_co_dim=3, lifting_dim=16, co_dims_fmults=(1, 2, 4), n_modes_per_layer=(16,8,4), norm="instance", act="leaky_relu") # only square grid is supported
         trainer = Trainer.NeuralOpTrainer(seed=get_random_int(), landmark_num=in_grid_sz[0])
 
         checkpoint_path = project_root() + '/checkpoints/sphere_model_neuralOp_2D'
@@ -88,7 +70,7 @@ if __name__ == "__main__":
     
         if not os.path.exists(checkpoint_path):
             train_state = trainer.train_state_init(model, lr=1e-4, model_kwargs={'x': jax.random.normal(jrandom.PRNGKey(get_random_int()), x0[0].shape), 't': jnp.array([0]),'object_fn': 'Heng'})
-            train_state, train_loss = trainer.train(train_state, sde_3d, sde_solver, sphere_data_generator_X0, train_steps, 16)
+            train_state, train_loss = trainer.train(train_state, sde_3d, sde_solver, sphere_data_generator_X0, train_steps, 10)
             plt.plot(train_loss)
             plt.show()
             # save the model
@@ -100,7 +82,7 @@ if __name__ == "__main__":
             params = restored_checkpoint["model"]["params"]
             train_state = trainer.train_state_init(model, lr=1e-3, model_kwargs={'x': jax.random.normal(jrandom.PRNGKey(get_random_int()), x0[0].shape), 't': jnp.array([0]),'object_fn': 'Heng'}, retrain=True, ckpt_params=params)
             if retrain:
-                train_state, train_loss = trainer.train(train_state, sde_3d, sde_solver, sphere_data_generator_X0, retrain_steps, 16)
+                train_state, train_loss = trainer.train(train_state, sde_3d, sde_solver, sphere_data_generator_X0, retrain_steps, 10)
                 plt.plot(train_loss)
                 plt.show()
                 # save the model
@@ -110,12 +92,13 @@ if __name__ == "__main__":
         score_fn = lambda x, t, x0: train_state.apply_fn(train_state.params, x, t)
         x0 = sphere_data_generator_X0.generate_data(64, 5)
         xT = sphere_data_generator_XT.generate_data(64, 1)   
-        reverse_sde = Time_Reversed_SDE_2Dmanifold(sde_3d, score_fn, 1.0,0.02)
+        # sde_3d = Brownian_Motion_SDE(dim=3, sigma=0.05, x0=x0[0])
+        reverse_sde = Time_Reversed_SDE(sde_3d, score_fn, 1.0,0.02)
         reverse_solver = EulerMaruyama.from_sde(reverse_sde, 0.02, 1.0, 3, condition_x=x0[0],debug_mode=False)
         condition_xs,_ = reverse_solver.solve(xT[0], rng_key=jrandom.PRNGKey(get_random_int()))
         # condition_xs = xs
         condition_xs = np.array(condition_xs)
-        condition_xs = np.reshape(condition_xs, (condition_xs.shape[0], condition_xs.shape[1] * condition_xs.shape[2], condition_xs.shape[3]))
+        # condition_xs = np.reshape(condition_xs, (condition_xs.shape[0], condition_xs.shape[1] * condition_xs.shape[2], condition_xs.shape[3]))
         trajectory_xs = condition_xs
     else:
         xs = np.array(xs)
